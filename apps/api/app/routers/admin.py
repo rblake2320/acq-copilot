@@ -23,6 +23,8 @@ _SERVICE_KEY_MAP = {
     "bls": "BLS_API_KEY",
     "gsa_perdiem": "GSA_PERDIEM_API_KEY",
     "regulations_gov": "REGULATIONS_GOV_API_KEY",
+    "congress_gov": "CONGRESS_GOV_API_KEY",
+    "census": "CENSUS_API_KEY",
 }
 
 
@@ -30,6 +32,13 @@ class VerifyApiKeyRequest(BaseModel):
     """Request body for verify-api-key."""
 
     service: str
+
+
+class SetApiKeyRequest(BaseModel):
+    """Request body for set-api-key."""
+
+    service: str
+    key: str
 
 
 @router.get("/health", response_model=HealthResponse)
@@ -256,6 +265,51 @@ async def list_api_keys() -> dict:
         )
 
 
+@router.post("/set-api-key")
+async def set_api_key(request: SetApiKeyRequest) -> dict:
+    """
+    Set an API key at runtime for the current server process.
+
+    The key is stored in the running process only (not persisted to .env).
+    Restart the server to clear runtime-set keys.
+    """
+    try:
+        service = request.service.lower()
+        attr = _SERVICE_KEY_MAP.get(service)
+
+        if attr is None:
+            available = list(_SERVICE_KEY_MAP.keys())
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Unknown service '{service}'. Available: {available}",
+            )
+
+        if not request.key or not request.key.strip():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Key value cannot be empty",
+            )
+
+        # Update in-place on the singleton settings object
+        object.__setattr__(settings, attr, request.key.strip())
+
+        logger.info("api_key_set", service=service, attr=attr)
+
+        return {
+            "service": service,
+            "configured": True,
+            "message": f"API key for '{service}' has been set (runtime only — restarts will require re-entry unless added to .env)",
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("set_api_key_failed", error=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to set API key",
+        )
+
+
 @router.post("/verify-api-key")
 async def verify_api_key(request: VerifyApiKeyRequest) -> dict:
     """
@@ -288,6 +342,7 @@ async def verify_api_key(request: VerifyApiKeyRequest) -> dict:
         return {
             "service": service,
             "configured": configured,
+            "valid": configured,
             "message": f"API key for '{service}' is {'configured' if configured else 'not configured'}",
         }
     except HTTPException:

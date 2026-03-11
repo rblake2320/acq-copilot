@@ -191,8 +191,24 @@ class APIClient {
     },
 
     getAPIKeyStatus: async (): Promise<APIKeyStatus[]> => {
-      // No dedicated endpoint; return empty (keys managed via .env)
-      return [];
+      const raw = await this.request<{
+        api_keys: Record<string, { configured: boolean; attribute: string }>;
+      }>("/admin/api-keys");
+      return Object.entries(raw.api_keys).map(([service, info]) => ({
+        service,
+        configured: info.configured,
+        validFrom: null,
+        expiresAt: null,
+        lastVerified: new Date(),
+        status: info.configured ? ("valid" as const) : ("unconfigured" as const),
+      }));
+    },
+
+    setAPIKey: async (service: string, key: string): Promise<{ configured: boolean; message: string }> => {
+      return this.request("/admin/set-api-key", {
+        method: "POST",
+        body: JSON.stringify({ service, key }),
+      });
     },
 
     getCacheStats: async (): Promise<CacheStats> => {

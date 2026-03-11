@@ -1,39 +1,79 @@
 "use client";
 
-import React, { useState } from "react";
-import { useQuery, useMutation } from "@tanstack/react-query";
-import { CheckCircle, AlertCircle, Clock, Zap, RefreshCw, Loader2, KeyRound } from "lucide-react";
+import React, { useState, useEffect } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import {
+  CheckCircle,
+  AlertCircle,
+  Clock,
+  RefreshCw,
+  Loader2,
+  KeyRound,
+  Eye,
+  EyeOff,
+  Save,
+  ChevronDown,
+  ChevronUp,
+} from "lucide-react";
 import { apiClient } from "@/lib/api";
-import { ToolHealthStatus, APIKeyStatus, CacheStats, AuditEvent } from "@/types";
+import { ToolHealthStatus, APIKeyStatus, AuditEvent } from "@/types";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { Input } from "@/components/ui/input";
 import { formatDate } from "@/lib/format";
 
-// Known services — shown even when the backend returns no API key data
+// All known services with their backend key names and labels
 const KNOWN_SERVICES = [
-  { name: "Anthropic", description: "Claude AI — chat and analysis" },
-  { name: "OpenAI", description: "GPT models — fallback generation" },
-  { name: "BLS", description: "Bureau of Labor Statistics — wage data" },
-  { name: "Regulations.gov", description: "Federal regulatory documents" },
-  { name: "GSA Per Diem", description: "GSA travel per diem rates" },
+  { id: "anthropic",       label: "Anthropic",         description: "Claude AI — chat and analysis" },
+  { id: "openai",          label: "OpenAI",             description: "GPT models — fallback generation" },
+  { id: "bls",             label: "BLS",                description: "Bureau of Labor Statistics — wage data" },
+  { id: "regulations_gov", label: "Regulations.gov",    description: "Federal regulatory documents" },
+  { id: "gsa_perdiem",     label: "GSA Per Diem",       description: "GSA travel per diem rates" },
+  { id: "congress_gov",    label: "Congress.gov",       description: "Congressional data and legislation" },
+  { id: "census",          label: "Census API",         description: "US Census Bureau data" },
 ];
 
 export default function AdminPage() {
-  // Track per-service verify results: null = not verified, true = valid, false = invalid
+  const queryClient = useQueryClient();
+
+  // Verify state: null = not checked, true = configured, false = not configured
   const [verifyResults, setVerifyResults] = useState<Record<string, boolean | null>>({});
   const [verifyingService, setVerifyingService] = useState<string | null>(null);
 
-  const handleVerify = async (serviceName: string) => {
-    setVerifyingService(serviceName);
+  // Key input state per service
+  const [keyInputs, setKeyInputs] = useState<Record<string, string>>({});
+  const [showKey, setShowKey] = useState<Record<string, boolean>>({});
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({});
+  const [saveStatus, setSaveStatus] = useState<Record<string, "idle" | "saving" | "saved" | "error">>({});
+
+  const handleVerify = async (serviceId: string) => {
+    setVerifyingService(serviceId);
     try {
-      const res = await apiClient.admin.verifyAPIKey(serviceName);
-      setVerifyResults((prev) => ({ ...prev, [serviceName]: res.valid }));
+      const res = await apiClient.admin.verifyAPIKey(serviceId);
+      setVerifyResults((prev) => ({ ...prev, [serviceId]: res.valid }));
     } catch {
-      setVerifyResults((prev) => ({ ...prev, [serviceName]: false }));
+      setVerifyResults((prev) => ({ ...prev, [serviceId]: false }));
     } finally {
       setVerifyingService(null);
+    }
+  };
+
+  const handleSaveKey = async (serviceId: string) => {
+    const key = keyInputs[serviceId]?.trim();
+    if (!key) return;
+    setSaveStatus((prev) => ({ ...prev, [serviceId]: "saving" }));
+    try {
+      await apiClient.admin.setAPIKey(serviceId, key);
+      setSaveStatus((prev) => ({ ...prev, [serviceId]: "saved" }));
+      setVerifyResults((prev) => ({ ...prev, [serviceId]: true }));
+      // Refresh key status
+      queryClient.invalidateQueries({ queryKey: ["api-keys"] });
+      setTimeout(() => setSaveStatus((prev) => ({ ...prev, [serviceId]: "idle" })), 3000);
+    } catch {
+      setSaveStatus((prev) => ({ ...prev, [serviceId]: "error" }));
+      setTimeout(() => setSaveStatus((prev) => ({ ...prev, [serviceId]: "idle" })), 3000);
     }
   };
 
@@ -46,6 +86,26 @@ export default function AdminPage() {
     queryKey: ["api-keys"],
     queryFn: () => apiClient.admin.getAPIKeyStatus(),
   });
+
+  // Auto-verify all services on page load
+  useEffect(() => {
+    if (apiKeys.length === 0) return;
+    const run = async () => {
+      const results: Record<string, boolean> = {};
+      await Promise.allSettled(
+        KNOWN_SERVICES.map(async (svc) => {
+          try {
+            const res = await apiClient.admin.verifyAPIKey(svc.id);
+            results[svc.id] = res.valid;
+          } catch {
+            results[svc.id] = false;
+          }
+        })
+      );
+      setVerifyResults(results);
+    };
+    run();
+  }, [apiKeys.length]);
 
   const { data: cacheStats } = useQuery({
     queryKey: ["cache-stats"],
@@ -61,57 +121,48 @@ export default function AdminPage() {
     mutationFn: () => apiClient.admin.clearCache(),
   });
 
-  const getStatusIcon = (status: string) => {
-    switch (status) {
-      case "healthy":
-        return <CheckCircle className="h-5 w-5 text-green-500" />;
-      case "valid":
-        return <CheckCircle className="h-5 w-5 text-green-500" />;
-      case "degraded":
-        return <AlertCircle className="h-5 w-5 text-yellow-500" />;
-      case "expired":
-        return <AlertCircle className="h-5 w-5 text-yellow-500" />;
-      case "error":
-        return <AlertCircle className="h-5 w-5 text-red-500" />;
-      case "invalid":
-        return <AlertCircle className="h-5 w-5 text-red-500" />;
-      default:
-        return <Clock className="h-5 w-5 text-blue-500" />;
-    }
+  const getStatusIcon = (st: string) => {
+    if (st === "healthy" || st === "valid" || st === "saved") return <CheckCircle className="h-5 w-5 text-green-500" />;
+    if (st === "degraded" || st === "expired") return <AlertCircle className="h-5 w-5 text-yellow-500" />;
+    if (st === "error" || st === "invalid") return <AlertCircle className="h-5 w-5 text-red-500" />;
+    return <Clock className="h-5 w-5 text-blue-500" />;
   };
 
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case "healthy":
-      case "valid":
-        return "bg-green-500/10 text-green-700 dark:text-green-400";
-      case "degraded":
-      case "expired":
-        return "bg-yellow-500/10 text-yellow-700 dark:text-yellow-400";
-      case "error":
-      case "invalid":
-        return "bg-red-500/10 text-red-700 dark:text-red-400";
-      default:
-        return "bg-blue-500/10 text-blue-700 dark:text-blue-400";
-    }
+  const getStatusColor = (st: string) => {
+    if (st === "healthy" || st === "valid") return "bg-green-500/10 text-green-700 dark:text-green-400";
+    if (st === "degraded" || st === "expired") return "bg-yellow-500/10 text-yellow-700 dark:text-yellow-400";
+    if (st === "error" || st === "invalid") return "bg-red-500/10 text-red-700 dark:text-red-400";
+    return "bg-muted text-muted-foreground";
   };
+
+  // Merge backend data + verify results into a single status string per service
+  const getServiceStatus = (serviceId: string): string => {
+    const verified = verifyResults[serviceId];
+    if (verified === true) return "valid";
+    if (verified === false) return "not configured";
+    const backendKey = apiKeys.find((k: APIKeyStatus) => k.service === serviceId);
+    if (backendKey) return backendKey.configured ? "valid" : "unconfigured";
+    return "unconfigured";
+  };
+
+  const configuredCount = KNOWN_SERVICES.filter(
+    (s) => getServiceStatus(s.id) === "valid"
+  ).length;
 
   return (
     <div className="space-y-6 p-6">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-foreground dark:text-foreground">
-            System Administration
-          </h1>
-          <p className="mt-2 text-muted-foreground dark:text-muted-foreground">
+          <h1 className="text-3xl font-bold text-foreground">System Administration</h1>
+          <p className="mt-2 text-muted-foreground">
             Monitor tool health, API configuration, and system metrics
           </p>
         </div>
         <Button
           onClick={() => clearCacheMutation.mutate()}
           disabled={clearCacheMutation.isPending}
-          className="gap-2 dark:hover:bg-primary/80"
+          className="gap-2"
         >
           {clearCacheMutation.isPending ? (
             <Loader2 className="h-4 w-4 animate-spin" />
@@ -124,65 +175,53 @@ export default function AdminPage() {
 
       {/* Overview Cards */}
       <div className="grid gap-4 md:grid-cols-4">
-        <Card className="dark:bg-card">
+        <Card>
           <CardHeader className="pb-3">
-            <CardTitle className="text-sm font-medium text-muted-foreground dark:text-muted-foreground">
-              Tools Healthy
-            </CardTitle>
+            <CardTitle className="text-sm font-medium text-muted-foreground">Tools Healthy</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-foreground dark:text-foreground">
+            <div className="text-2xl font-bold">
               {toolHealth.filter((t) => t.status === "healthy").length}/{toolHealth.length}
             </div>
-            <p className="text-xs text-muted-foreground dark:text-muted-foreground">
-              All operational
-            </p>
+            <p className="text-xs text-muted-foreground">API tools operational</p>
           </CardContent>
         </Card>
 
-        <Card className="dark:bg-card">
+        <Card>
           <CardHeader className="pb-3">
-            <CardTitle className="text-sm font-medium text-muted-foreground dark:text-muted-foreground">
-              API Keys
-            </CardTitle>
+            <CardTitle className="text-sm font-medium text-muted-foreground">API Keys</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-foreground dark:text-foreground">
-              {apiKeys.filter((k) => k.status === "valid").length}/{apiKeys.length}
+            <div className="text-2xl font-bold">
+              {configuredCount}/{KNOWN_SERVICES.length}
             </div>
-            <p className="text-xs text-muted-foreground dark:text-muted-foreground">
-              Configured & valid
-            </p>
+            <p className="text-xs text-muted-foreground">Configured</p>
           </CardContent>
         </Card>
 
-        <Card className="dark:bg-card">
+        <Card>
           <CardHeader className="pb-3">
-            <CardTitle className="text-sm font-medium text-muted-foreground dark:text-muted-foreground">
-              Cache Hit Rate
-            </CardTitle>
+            <CardTitle className="text-sm font-medium text-muted-foreground">Cache Hit Rate</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-foreground dark:text-foreground">
+            <div className="text-2xl font-bold">
               {cacheStats ? `${Math.round(cacheStats.hitRate * 100)}%` : "—"}
             </div>
-            <p className="text-xs text-muted-foreground dark:text-muted-foreground">
+            <p className="text-xs text-muted-foreground">
               {cacheStats ? `${cacheStats.totalRequests} requests` : "No data"}
             </p>
           </CardContent>
         </Card>
 
-        <Card className="dark:bg-card">
+        <Card>
           <CardHeader className="pb-3">
-            <CardTitle className="text-sm font-medium text-muted-foreground dark:text-muted-foreground">
-              Cache Size
-            </CardTitle>
+            <CardTitle className="text-sm font-medium text-muted-foreground">Cache Size</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold text-foreground dark:text-foreground">
+            <div className="text-2xl font-bold">
               {cacheStats ? `${(cacheStats.cacheSize / 1024 / 1024).toFixed(1)} MB` : "—"}
             </div>
-            <p className="text-xs text-muted-foreground dark:text-muted-foreground">
+            <p className="text-xs text-muted-foreground">
               {cacheStats ? `${cacheStats.evictions} evictions` : "No data"}
             </p>
           </CardContent>
@@ -190,8 +229,8 @@ export default function AdminPage() {
       </div>
 
       {/* Tabs */}
-      <Tabs defaultValue="tools" className="space-y-4">
-        <TabsList className="dark:bg-muted">
+      <Tabs defaultValue="api-keys" className="space-y-4">
+        <TabsList>
           <TabsTrigger value="tools">Tool Health</TabsTrigger>
           <TabsTrigger value="api-keys">API Keys</TabsTrigger>
           <TabsTrigger value="audit">Audit Log</TabsTrigger>
@@ -206,25 +245,19 @@ export default function AdminPage() {
           ) : (
             <div className="grid gap-3">
               {toolHealth.map((tool: ToolHealthStatus) => (
-                <Card key={tool.toolName} className="dark:bg-card">
+                <Card key={tool.toolName}>
                   <CardContent className="flex items-center justify-between py-4">
                     <div className="flex items-center gap-4">
                       {getStatusIcon(tool.status)}
                       <div>
-                        <h4 className="font-semibold text-foreground dark:text-foreground">
-                          {tool.toolName}
-                        </h4>
-                        <p className="text-xs text-muted-foreground dark:text-muted-foreground">
-                          Response: {tool.responseTime}ms • Success rate:{" "}
-                          {Math.round(tool.successRate * 100)}%
+                        <h4 className="font-semibold">{tool.toolName}</h4>
+                        <p className="text-xs text-muted-foreground">
+                          Response: {tool.responseTime}ms · Success: {Math.round(tool.successRate * 100)}%
                         </p>
                       </div>
                     </div>
                     <div className="flex items-center gap-3">
-                      <Badge
-                        variant="secondary"
-                        className={getStatusColor(tool.status)}
-                      >
+                      <Badge variant="secondary" className={getStatusColor(tool.status)}>
                         {tool.status}
                       </Badge>
                       {tool.errorCount > 0 && (
@@ -242,77 +275,119 @@ export default function AdminPage() {
 
         {/* API Keys Tab */}
         <TabsContent value="api-keys" className="space-y-3">
-          <Card className="dark:bg-card">
+          <Card>
             <CardHeader>
-              <CardTitle className="dark:text-foreground">Configured Services</CardTitle>
+              <CardTitle>API Key Management</CardTitle>
               <CardDescription>
-                API keys are managed via server environment variables. Use Verify to test each key.
+                Verify existing keys or paste a new key to load it into the running server. Keys set here
+                are active immediately but reset on server restart — add them to <code>.env</code> to make
+                them permanent.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-3">
               {KNOWN_SERVICES.map((svc) => {
-                const verified = verifyResults[svc.name];
-                const isVerifying = verifyingService === svc.name;
-                // Also check if the backend returned status for this service
-                const backendKey = apiKeys.find((k: APIKeyStatus) => k.service === svc.name);
-                const status = backendKey
-                  ? backendKey.configured
-                    ? backendKey.status
-                    : "Not configured"
-                  : verified === null || verified === undefined
-                  ? "Not configured"
-                  : verified
-                  ? "valid"
-                  : "invalid";
+                const st = getServiceStatus(svc.id);
+                const isVerifying = verifyingService === svc.id;
+                const saving = saveStatus[svc.id] ?? "idle";
+                const isExpanded = expanded[svc.id] ?? false;
+                const keyVal = keyInputs[svc.id] ?? "";
+                const masked = showKey[svc.id] ? keyVal : keyVal.replace(/./g, "•");
 
                 return (
                   <div
-                    key={svc.name}
-                    className="flex items-center justify-between rounded-lg border border-border p-4 dark:border-border"
+                    key={svc.id}
+                    className="rounded-lg border border-border overflow-hidden"
                   >
-                    <div className="flex items-center gap-3">
-                      <KeyRound className="h-5 w-5 text-muted-foreground" />
-                      <div>
-                        <h4 className="font-semibold text-foreground dark:text-foreground">
-                          {svc.name}
-                        </h4>
-                        <p className="text-xs text-muted-foreground dark:text-muted-foreground">
-                          {svc.description}
-                        </p>
+                    {/* Header row */}
+                    <div className="flex items-center justify-between p-4">
+                      <div className="flex items-center gap-3">
+                        <KeyRound className="h-5 w-5 text-muted-foreground shrink-0" />
+                        <div>
+                          <h4 className="font-semibold">{svc.label}</h4>
+                          <p className="text-xs text-muted-foreground">{svc.description}</p>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Badge
+                          variant="secondary"
+                          className={
+                            st === "valid"
+                              ? "bg-green-500/10 text-green-700 dark:text-green-400"
+                              : st === "not configured" || st === "unconfigured"
+                              ? "bg-muted text-muted-foreground"
+                              : "bg-red-500/10 text-red-700 dark:text-red-400"
+                          }
+                        >
+                          {st}
+                        </Badge>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={isVerifying}
+                          onClick={() => handleVerify(svc.id)}
+                          className="gap-1 text-xs"
+                        >
+                          {isVerifying ? (
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                          ) : (
+                            <CheckCircle className="h-3 w-3" />
+                          )}
+                          Verify
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => setExpanded((prev) => ({ ...prev, [svc.id]: !isExpanded }))}
+                          className="gap-1 text-xs"
+                        >
+                          {isExpanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+                          {isExpanded ? "Cancel" : "Load Key"}
+                        </Button>
                       </div>
                     </div>
-                    <div className="flex items-center gap-3">
-                      <Badge
-                        variant="secondary"
-                        className={
-                          verified === true || status === "valid"
-                            ? "bg-green-500/10 text-green-700 dark:text-green-400"
-                            : verified === false || status === "invalid"
-                            ? "bg-red-500/10 text-red-700 dark:text-red-400"
-                            : "bg-muted text-muted-foreground"
-                        }
-                      >
-                        {verified === true
-                          ? "valid"
-                          : verified === false
-                          ? "invalid"
-                          : status}
-                      </Badge>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        disabled={isVerifying}
-                        onClick={() => handleVerify(svc.name)}
-                        className="gap-1 dark:border-border"
-                      >
-                        {isVerifying ? (
-                          <Loader2 className="h-3 w-3 animate-spin" />
-                        ) : (
-                          <CheckCircle className="h-3 w-3" />
-                        )}
-                        Verify
-                      </Button>
-                    </div>
+
+                    {/* Expandable key input */}
+                    {isExpanded && (
+                      <div className="border-t border-border bg-muted/30 p-4 flex items-center gap-2">
+                        <div className="relative flex-1">
+                          <Input
+                            type={showKey[svc.id] ? "text" : "password"}
+                            placeholder={`Paste your ${svc.label} API key…`}
+                            value={keyVal}
+                            onChange={(e) =>
+                              setKeyInputs((prev) => ({ ...prev, [svc.id]: e.target.value }))
+                            }
+                            className="pr-10 font-mono text-sm"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setShowKey((prev) => ({ ...prev, [svc.id]: !prev[svc.id] }))}
+                            className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                          >
+                            {showKey[svc.id] ? (
+                              <EyeOff className="h-4 w-4" />
+                            ) : (
+                              <Eye className="h-4 w-4" />
+                            )}
+                          </button>
+                        </div>
+                        <Button
+                          size="sm"
+                          disabled={!keyVal.trim() || saving === "saving"}
+                          onClick={() => handleSaveKey(svc.id)}
+                          className="gap-1 shrink-0"
+                        >
+                          {saving === "saving" ? (
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                          ) : saving === "saved" ? (
+                            <CheckCircle className="h-3 w-3 text-green-500" />
+                          ) : (
+                            <Save className="h-3 w-3" />
+                          )}
+                          {saving === "saving" ? "Saving…" : saving === "saved" ? "Saved!" : saving === "error" ? "Error" : "Save"}
+                        </Button>
+                      </div>
+                    )}
                   </div>
                 );
               })}
@@ -322,32 +397,28 @@ export default function AdminPage() {
 
         {/* Audit Log Tab */}
         <TabsContent value="audit" className="space-y-3">
-          <Card className="dark:bg-card">
+          <Card>
             <CardHeader>
-              <CardTitle className="dark:text-foreground">Recent Activity</CardTitle>
+              <CardTitle>Recent Activity</CardTitle>
               <CardDescription>Last 50 audit events</CardDescription>
             </CardHeader>
             <CardContent>
               <div className="space-y-2">
                 {auditLog.length === 0 ? (
-                  <p className="py-4 text-center text-sm text-muted-foreground dark:text-muted-foreground">
-                    No audit events
-                  </p>
+                  <p className="py-4 text-center text-sm text-muted-foreground">No audit events</p>
                 ) : (
                   auditLog.map((event: AuditEvent) => (
                     <div
                       key={event.id}
-                      className="flex items-center justify-between border-b border-border pb-2 last:border-0 dark:border-border"
+                      className="flex items-center justify-between border-b border-border pb-2 last:border-0"
                     >
                       <div className="text-sm">
-                        <p className="font-medium text-foreground dark:text-foreground">
-                          {event.action}
-                        </p>
-                        <p className="text-xs text-muted-foreground dark:text-muted-foreground">
+                        <p className="font-medium">{event.action}</p>
+                        <p className="text-xs text-muted-foreground">
                           {event.resource}: {event.resourceId}
                         </p>
                       </div>
-                      <div className="text-right text-xs text-muted-foreground dark:text-muted-foreground">
+                      <div className="text-right text-xs text-muted-foreground">
                         <p>{formatDate(new Date(event.timestamp))}</p>
                         <p>{event.ipAddress}</p>
                       </div>
