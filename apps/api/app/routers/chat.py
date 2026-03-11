@@ -206,6 +206,46 @@ async def chat_history(
         )
 
 
+class FeedbackRequest(BaseModel):
+    rating: int  # 1 = thumbs up, -1 = thumbs down
+
+
+@router.post("/messages/{message_id}/feedback")
+async def rate_message(
+    message_id: str,
+    request: FeedbackRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """
+    Rate an assistant message thumbs-up (1) or thumbs-down (-1).
+    Used to build a quality-filtered training dataset.
+    """
+    try:
+        if request.rating not in (1, -1):
+            raise HTTPException(status_code=400, detail="rating must be 1 or -1")
+
+        try:
+            msg_uuid = uuid.UUID(message_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid message ID")
+
+        result = await db.execute(select(Message).where(Message.id == msg_uuid))
+        msg = result.scalars().first()
+        if not msg:
+            raise HTTPException(status_code=404, detail="Message not found")
+
+        msg.feedback = request.rating
+        await db.commit()
+        logger.info("message_rated", message_id=message_id, rating=request.rating)
+        return {"message_id": message_id, "rating": request.rating, "status": "saved"}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("rate_message_error", error=str(e))
+        raise HTTPException(status_code=500, detail="Failed to save rating")
+
+
 @router.post("/", response_model=ChatResponse)
 async def chat(
     request: ChatRequest,

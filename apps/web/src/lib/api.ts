@@ -52,6 +52,13 @@ class APIClient {
       return this.request<Message[]>(`/chat/history/${conversationId}`);
     },
 
+    rateMessage: async (messageId: string, rating: 1 | -1): Promise<void> => {
+      return this.request(`/chat/messages/${messageId}/feedback`, {
+        method: "POST",
+        body: JSON.stringify({ rating }),
+      });
+    },
+
     createConversation: async (title: string): Promise<{ id: string }> => {
       return this.request<{ id: string }>("/chat/conversations", {
         method: "POST",
@@ -240,6 +247,20 @@ class APIClient {
         changes: e.details_json,
         ipAddress: "",
       }));
+    },
+
+    getTrainingStats: async (): Promise<{
+      total_conversations: number;
+      total_messages: number;
+      thumbs_up: number;
+      thumbs_down: number;
+      exportable_conversations: number;
+    }> => {
+      return this.request("/admin/training-data/stats");
+    },
+
+    exportTrainingData: (ratedOnly: boolean = false): string => {
+      return `${API_BASE}/admin/training-data/export?rated_only=${ratedOnly}`;
     },
 
     clearCache: async (): Promise<{ cleared: number }> => {

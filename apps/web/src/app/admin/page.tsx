@@ -14,6 +14,10 @@ import {
   Save,
   ChevronDown,
   ChevronUp,
+  Download,
+  ThumbsUp,
+  ThumbsDown,
+  MessageSquare,
 } from "lucide-react";
 import { apiClient } from "@/lib/api";
 import { ToolHealthStatus, APIKeyStatus, AuditEvent } from "@/types";
@@ -106,6 +110,12 @@ export default function AdminPage() {
     };
     run();
   }, [apiKeys.length]);
+
+  const { data: trainingStats } = useQuery({
+    queryKey: ["training-stats"],
+    queryFn: () => apiClient.admin.getTrainingStats(),
+    refetchInterval: 30000,
+  });
 
   const { data: cacheStats } = useQuery({
     queryKey: ["cache-stats"],
@@ -233,6 +243,7 @@ export default function AdminPage() {
         <TabsList>
           <TabsTrigger value="tools">Tool Health</TabsTrigger>
           <TabsTrigger value="api-keys">API Keys</TabsTrigger>
+          <TabsTrigger value="training">Training Data</TabsTrigger>
           <TabsTrigger value="audit">Audit Log</TabsTrigger>
         </TabsList>
 
@@ -391,6 +402,108 @@ export default function AdminPage() {
                   </div>
                 );
               })}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* Training Data Tab */}
+        <TabsContent value="training" className="space-y-4">
+          {/* Stats row */}
+          <div className="grid gap-4 md:grid-cols-4">
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
+                  <MessageSquare className="h-4 w-4" /> Conversations
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">{trainingStats?.total_conversations ?? "—"}</div>
+                <p className="text-xs text-muted-foreground">{trainingStats?.exportable_conversations ?? 0} exportable</p>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium text-muted-foreground">Total Messages</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold">{trainingStats?.total_messages ?? "—"}</div>
+                <p className="text-xs text-muted-foreground">Across all conversations</p>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
+                  <ThumbsUp className="h-4 w-4 text-green-500" /> Thumbs Up
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold text-green-600">{trainingStats?.thumbs_up ?? 0}</div>
+                <p className="text-xs text-muted-foreground">High-quality responses</p>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
+                  <ThumbsDown className="h-4 w-4 text-red-500" /> Thumbs Down
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <div className="text-2xl font-bold text-red-600">{trainingStats?.thumbs_down ?? 0}</div>
+                <p className="text-xs text-muted-foreground">Needs improvement</p>
+              </CardContent>
+            </Card>
+          </div>
+
+          {/* Export card */}
+          <Card>
+            <CardHeader>
+              <CardTitle>Export Training Data</CardTitle>
+              <CardDescription>
+                Download conversation history as JSONL for fine-tuning. Each line contains a complete
+                conversation in Anthropic fine-tuning format:{" "}
+                <code className="text-xs">{"{"}"messages": [...]{"}"}</code>.
+                Rate responses with 👍/👎 in the Chat view — then use the rated-only export to
+                build a curated, high-quality training set.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="flex flex-wrap gap-3">
+              <a href={apiClient.admin.exportTrainingData(false)} download>
+                <Button variant="outline" className="gap-2">
+                  <Download className="h-4 w-4" />
+                  Export All Conversations
+                </Button>
+              </a>
+              <a href={apiClient.admin.exportTrainingData(true)} download>
+                <Button className="gap-2">
+                  <ThumbsUp className="h-4 w-4" />
+                  Export Thumbs-Up Only
+                </Button>
+              </a>
+            </CardContent>
+          </Card>
+
+          {/* How-to */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">How to Use for Model Improvement</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-2 text-sm text-muted-foreground">
+              <div className="flex gap-3">
+                <span className="font-mono text-primary font-bold">1.</span>
+                <span>Chat with the system — every conversation is automatically saved to the database.</span>
+              </div>
+              <div className="flex gap-3">
+                <span className="font-mono text-primary font-bold">2.</span>
+                <span>Rate responses with 👍 (good) or 👎 (needs work) using the buttons below each AI reply.</span>
+              </div>
+              <div className="flex gap-3">
+                <span className="font-mono text-primary font-bold">3.</span>
+                <span>Click <strong>Export Thumbs-Up Only</strong> to download a curated JSONL file of your best examples.</span>
+              </div>
+              <div className="flex gap-3">
+                <span className="font-mono text-primary font-bold">4.</span>
+                <span>Use the JSONL with Anthropic fine-tuning, OpenAI fine-tuning, or any RLHF pipeline that accepts message-format data.</span>
+              </div>
             </CardContent>
           </Card>
         </TabsContent>

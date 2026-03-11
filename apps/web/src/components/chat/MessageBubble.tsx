@@ -5,8 +5,9 @@ import { Message, Citation } from "@/types";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { ChevronDown, ChevronUp, ExternalLink } from "lucide-react";
+import { ChevronDown, ChevronUp, ExternalLink, ThumbsUp, ThumbsDown } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { apiClient } from "@/lib/api";
 
 interface MessageBubbleProps {
   message: Message;
@@ -14,7 +15,22 @@ interface MessageBubbleProps {
 
 export function MessageBubble({ message }: MessageBubbleProps) {
   const [expandedCitations, setExpandedCitations] = useState(false);
+  const [rating, setRating] = useState<1 | -1 | null>(null);
+  const [saving, setSaving] = useState(false);
   const isUser = message.role === "user";
+
+  const handleRate = async (value: 1 | -1) => {
+    if (saving || rating === value) return;
+    setSaving(true);
+    try {
+      await apiClient.chat.rateMessage(message.id, value);
+      setRating(value);
+    } catch {
+      // silently ignore — feedback is best-effort
+    } finally {
+      setSaving(false);
+    }
+  };
 
   return (
     <div className={cn("flex gap-3", isUser ? "justify-end" : "justify-start")}>
@@ -83,6 +99,44 @@ export function MessageBubble({ message }: MessageBubbleProps) {
                 {toolRunId}
               </Badge>
             ))}
+          </div>
+        )}
+
+        {/* Feedback buttons — only on assistant messages */}
+        {!isUser && (
+          <div className="mt-3 flex items-center gap-1 border-t border-border/30 pt-2">
+            <span className="text-xs text-muted-foreground mr-1">Rate this response:</span>
+            <button
+              onClick={() => handleRate(1)}
+              disabled={saving}
+              title="Thumbs up — good response"
+              className={cn(
+                "rounded p-1 transition-colors",
+                rating === 1
+                  ? "text-green-500"
+                  : "text-muted-foreground hover:text-green-500"
+              )}
+            >
+              <ThumbsUp className="h-3.5 w-3.5" />
+            </button>
+            <button
+              onClick={() => handleRate(-1)}
+              disabled={saving}
+              title="Thumbs down — needs improvement"
+              className={cn(
+                "rounded p-1 transition-colors",
+                rating === -1
+                  ? "text-red-500"
+                  : "text-muted-foreground hover:text-red-500"
+              )}
+            >
+              <ThumbsDown className="h-3.5 w-3.5" />
+            </button>
+            {rating !== null && (
+              <span className="text-xs text-muted-foreground ml-1">
+                {rating === 1 ? "Marked as helpful" : "Marked for improvement"}
+              </span>
+            )}
           </div>
         )}
       </div>

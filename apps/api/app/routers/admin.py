@@ -1,8 +1,11 @@
 """Administrative endpoints."""
 from datetime import datetime
 from typing import Optional
+import json
 from sqlalchemy.ext.asyncio import AsyncSession
-from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import select, func
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 import structlog
 
@@ -11,6 +14,7 @@ from ..tools.registry import get_registry
 from ..services.audit import AuditService
 from ..schemas.common import HealthResponse, AuditEventResponse, CacheStatsResponse, PaginatedResponse
 from ..config import settings
+from ..models.database import Conversation, Message
 
 router = APIRouter()
 logger = structlog.get_logger(__name__)
@@ -353,3 +357,111 @@ async def verify_api_key(request: VerifyApiKeyRequest) -> dict:
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to verify API key",
         )
+
+
+# ── Training Data ─────────────────────────────────────────────────────────────
+
+
+@router.get("/training-data/stats")
+async def training_data_stats(db: AsyncSession = Depends(get_db)) -> dict:
+    """
+    Return conversation and message counts for the training data dashboard.
+    """
+    try:
+        total_convs = (await db.execute(select(func.count()).select_from(Conversation))).scalar_one()
+        total_msgs = (await db.execute(select(func.count()).select_from(Message))).scalar_one()
+        thumbs_up = (
+            await db.execute(
+                select(func.count()).select_from(Message).where(Message.feedback == 1)
+            )
+        ).scalar_one()
+        thumbs_down = (
+            await db.execute(
+                select(func.count()).select_from(Message).where(Message.feedback == -1)
+            )
+        ).scalar_one()
+
+        # Count exportable turns: conversations that have at least one user+assistant pair
+        exportable = (
+            await db.execute(
+                select(func.count()).select_from(Conversation).where(
+                    Conversation.id.in_(
+                        select(Message.conversation_id).where(Message.role == "assistant").distinct()
+                    )
+                )
+            )
+        ).scalar_one()
+
+        return {
+            "total_conversations": total_convs,
+            "total_messages": total_msgs,
+            "thumbs_up": thumbs_up,
+            "thumbs_down": thumbs_down,
+            "exportable_conversations": exportable,
+        }
+    except Exception as e:
+        logger.error("training_stats_failed", error=str(e))
+        raise HTTPException(status_code=500, detail="Failed to get training stats")
+
+
+@router.get("/training-data/export")
+async def export_training_data(
+    rated_only: bool = Query(False, description="Only export conversations with thumbs-up responses"),
+    db: AsyncSession = Depends(get_db),
+) -> StreamingResponse:
+    """
+    Export conversation history as JSONL in Anthropic fine-tuning format.
+
+    Each line: {"messages": [{"role": "user", "content": "..."}, {"role": "assistant", "content": "..."}]}
+
+    Set rated_only=true to export only conversations where at least one
+    assistant message was rated thumbs-up (feedback=1).
+    """
+    try:
+        # Get all conversations (optionally only those with thumbs-up messages)
+        if rated_only:
+            conv_ids_with_thumbsup = select(Message.conversation_id).where(
+                Message.feedback == 1
+            ).distinct()
+            conv_query = select(Conversation).where(
+                Conversation.id.in_(conv_ids_with_thumbsup)
+            ).order_by(Conversation.created_at)
+        else:
+            conv_query = select(Conversation).order_by(Conversation.created_at)
+
+        conversations = (await db.execute(conv_query)).scalars().all()
+
+        async def generate_jsonl():
+            for conv in conversations:
+                msgs_result = await db.execute(
+                    select(Message)
+                    .where(Message.conversation_id == conv.id)
+                    .order_by(Message.created_at)
+                )
+                msgs = msgs_result.scalars().all()
+
+                # Build turns: only include user/assistant messages
+                turns = [
+                    {"role": m.role, "content": m.content}
+                    for m in msgs
+                    if m.role in ("user", "assistant")
+                ]
+
+                # Must have at least one user + one assistant message
+                if not any(t["role"] == "user" for t in turns):
+                    continue
+                if not any(t["role"] == "assistant" for t in turns):
+                    continue
+
+                line = json.dumps({"messages": turns})
+                yield line + "\n"
+
+        filename = "training_data_rated.jsonl" if rated_only else "training_data_all.jsonl"
+        return StreamingResponse(
+            generate_jsonl(),
+            media_type="application/x-ndjson",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+    except Exception as e:
+        logger.error("export_training_data_failed", error=str(e))
+        raise HTTPException(status_code=500, detail="Failed to export training data")

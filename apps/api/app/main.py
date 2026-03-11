@@ -74,6 +74,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Create tables
     async with db_engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        # Add columns that may not exist in already-created tables (idempotent)
+        await conn.execute(
+            __import__("sqlalchemy").text(
+                "ALTER TABLE messages ADD COLUMN IF NOT EXISTS feedback INTEGER"
+            )
+        )
     logger.info("database_initialized")
 
     # Initialize cache service

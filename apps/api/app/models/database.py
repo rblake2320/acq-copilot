@@ -101,6 +101,9 @@ class Message(Base):
     )
     role: str = mapped_column(String(50), nullable=False)  # "user", "assistant", "system"
     content: str = mapped_column(Text, nullable=False)
+    feedback: Optional[int] = mapped_column(
+        nullable=True, default=None  # 1 = thumbs up, -1 = thumbs down, NULL = no rating
+    )
     created_at: datetime = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
 
     conversation = relationship("Conversation", back_populates="messages")
