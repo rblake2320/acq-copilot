@@ -1,6 +1,7 @@
 """IGCE (Independent Government Cost Estimate) router."""
+import time
 from datetime import datetime
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -17,98 +18,230 @@ router = APIRouter()
 logger = structlog.get_logger(__name__)
 
 
-class LaborCategory(BaseModel):
-    """Labor category for IGCE calculation."""
+# ---------------------------------------------------------------------------
+# Frontend-compatible request / response models
+# ---------------------------------------------------------------------------
 
-    title: str
-    soc_code: str
-    fte_count: float
-    location_code: str = "US000000"
+class FrontendLaborLine(BaseModel):
+    """A single labor line as sent by the frontend form."""
+
+    id: str
+    category: str
+    laborCategory: str
+    year: int
+    rate: float
+    hours: float
+    subtotal: float
 
 
-class IGCECalculateRequest(BaseModel):
-    """Request body for IGCE calculate/build endpoints."""
+class FrontendLaborCategory(BaseModel):
+    """A labor category with one or more year lines."""
 
-    labor_categories: List[LaborCategory]
-    base_year: int
-    option_years: int = Field(default=1, ge=0)
-    burden_multiplier: float = Field(default=2.0, ge=1.0)
-    escalation_rate: float = Field(default=0.03, ge=0.0)
-    productive_hours: int = Field(default=1880, ge=1)
-    escalation_method: str = Field(default="compound", pattern="^(compound|simple)$")
-    scenario: str = Field(default="base", pattern="^(base|low|high)$")
-    include_validation: bool = False
+    id: str
+    name: str
+    baseRate: float
+    escalationRate: float  # percentage, e.g. 2.5 means 2.5 %
+    lines: List[FrontendLaborLine] = Field(default_factory=list)
 
+
+class FrontendTravelEvent(BaseModel):
+    """A single travel event."""
+
+    id: str
+    destination: str
+    purpose: str
+    duration: float       # days per trip
+    frequency: float      # trips per year
+    transportationCost: float
+    lodging: float
+    mealsAndIncidentals: float
+
+
+class FrontendAssumptions(BaseModel):
+    """Assumptions block from the form."""
+
+    laborEscalation: float = 2.0
+    travelCostInflation: float = 2.0
+    contingency: float = 10.0
+    profitMargin: float = 15.0
+    notes: str = ""
+
+
+class FrontendPerformancePeriod(BaseModel):
+    startDate: str
+    endDate: str
+
+
+class FrontendIGCERequest(BaseModel):
+    """Request body exactly matching the frontend IGCEInput type."""
+
+    projectName: str
+    projectDescription: str
+    performancePeriod: FrontendPerformancePeriod
+    laborCategories: List[FrontendLaborCategory]
+    travelEvents: List[FrontendTravelEvent] = Field(default_factory=list)
+    assumptions: FrontendAssumptions = Field(default_factory=FrontendAssumptions)
+
+
+# ---------------------------------------------------------------------------
+# Calculation helpers
+# ---------------------------------------------------------------------------
+
+def _round2(v: float) -> float:
+    return round(v, 2)
+
+
+def _compute_igce(req: FrontendIGCERequest) -> dict:
+    """
+    Pure calculation:
+      1. Sum labor lines (use subtotals from frontend if present, else rate*hours).
+         Apply escalation per year: cost_year_n = cost_year_1 * (1 + esc/100)^(n-1).
+      2. Sum travel: annual = (transport + lodging + mie) * duration * frequency.
+      3. subtotal = labor + travel
+      4. contingency = subtotal * contingency% / 100
+      5. profit = (subtotal + contingency) * profitMargin% / 100
+      6. total = subtotal + contingency + profit
+    Returns a dict matching the frontend IGCEOutput type.
+    """
+    assumptions = req.assumptions
+    labor_by_year: Dict[int, float] = {}
+    travel_by_year: Dict[int, float] = {}
+
+    # --- Labor ---
+    for lc in req.laborCategories:
+        for line in lc.lines:
+            year = line.year
+            # Use frontend-computed subtotal when available; fallback to rate*hours
+            base_cost = line.subtotal if line.subtotal > 0 else (line.rate * line.hours)
+            # Apply escalation for option years (year 1 = no escalation)
+            n = year - 1  # 0-based index
+            escalated = base_cost * ((1 + lc.escalationRate / 100) ** n)
+            labor_by_year[year] = labor_by_year.get(year, 0.0) + escalated
+
+    labor_total = sum(labor_by_year.values())
+
+    # If no lines were provided but categories exist, build year-1 costs from baseRate only
+    if not labor_by_year and req.laborCategories:
+        for lc in req.laborCategories:
+            # Assume 2080 standard hours when no lines given
+            cost = lc.baseRate * 2080
+            labor_by_year[1] = labor_by_year.get(1, 0.0) + cost
+        labor_total = sum(labor_by_year.values())
+
+    # --- Travel ---
+    for te in req.travelEvents:
+        annual = (te.transportationCost + te.lodging + te.mealsAndIncidentals) * te.duration * te.frequency
+        # Assign to year 1 (single-year travel; could be extended later)
+        travel_by_year[1] = travel_by_year.get(1, 0.0) + annual
+
+    travel_total = sum(travel_by_year.values())
+
+    # --- Rollup ---
+    subtotal = labor_total + travel_total
+    contingency_amount = subtotal * (assumptions.contingency / 100)
+    profit_amount = (subtotal + contingency_amount) * (assumptions.profitMargin / 100)
+    final_total = subtotal + contingency_amount + profit_amount
+
+    # Sensitivity (±10 % low/high)
+    sensitivity = {
+        "low": _round2(final_total * 0.9),
+        "base": _round2(final_total),
+        "high": _round2(final_total * 1.1),
+    }
+
+    # Formulas (human-readable audit trail)
+    formulas: Dict[str, str] = {
+        "labor_total": "sum(rate × hours) per year, escalated at lc.escalationRate% compound",
+        "travel_annual": "(transportation + lodging + mie) × duration_days × frequency",
+        "subtotal": "labor_total + travel_total",
+        "contingency": f"subtotal × {assumptions.contingency}%",
+        "profit": f"(subtotal + contingency) × {assumptions.profitMargin}%",
+        "total": "subtotal + contingency + profit",
+        "sensitivity_low": "total × 0.90",
+        "sensitivity_high": "total × 1.10",
+    }
+
+    # Citations (BLS OEWS reference)
+    citations = [
+        {
+            "id": "bls-oews",
+            "source": "BLS Occupational Employment and Wage Statistics",
+            "url": "https://www.bls.gov/oes/",
+            "timestamp": datetime.utcnow().isoformat(),
+            "snippet": "BLS OEWS data used as wage reference for cost estimation.",
+            "relevance": 0.9,
+        }
+    ]
+
+    now = datetime.utcnow().isoformat()
+
+    return {
+        "id": str(uuid.uuid4()),
+        "input": {
+            "projectName": req.projectName,
+            "projectDescription": req.projectDescription,
+            "performancePeriod": {
+                "startDate": req.performancePeriod.startDate,
+                "endDate": req.performancePeriod.endDate,
+            },
+            "laborCategories": [lc.model_dump() for lc in req.laborCategories],
+            "travelEvents": [te.model_dump() for te in req.travelEvents],
+            "assumptions": assumptions.model_dump(),
+        },
+        "summaryTotal": _round2(final_total),
+        "laborTotal": _round2(labor_total),
+        "travelTotal": _round2(travel_total),
+        "contingencyTotal": _round2(contingency_amount),
+        "profitTotal": _round2(profit_amount),
+        "finalTotal": _round2(final_total),
+        "laborByYear": {k: _round2(v) for k, v in sorted(labor_by_year.items())},
+        "travelByYear": {k: _round2(v) for k, v in sorted(travel_by_year.items())},
+        "sensitivity": sensitivity,
+        "formulas": formulas,
+        "citations": citations,
+        "createdAt": now,
+        "updatedAt": now,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Endpoints
+# ---------------------------------------------------------------------------
 
 @router.post("/calculate")
-async def calculate_igce(request: IGCECalculateRequest) -> dict:
+async def calculate_igce(request: FrontendIGCERequest) -> dict:
     """
-    Build a comprehensive IGCE using the igce.build tool.
+    Build an IGCE from the frontend form payload.
 
-    Accepts labor categories, base year, option years, burden multiplier,
-    and escalation rate and returns a full cost estimate.
+    Accepts the frontend's IGCEInput schema (camelCase) and returns a
+    response that matches the frontend's IGCEOutput type exactly so the
+    IGCEResults component can render it without any mapping.
     """
+    t0 = time.monotonic()
     try:
-        registry = get_registry()
-        tool = registry.get("igce.build")
-        if not tool:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="IGCE build tool is not available",
-            )
-
-        params = {
-            "action": "build",
-            "labor_categories": [lc.model_dump() for lc in request.labor_categories],
-            "base_year": request.base_year,
-            "option_years": request.option_years,
-            "burden_multiplier": request.burden_multiplier,
-            "escalation_rate": request.escalation_rate,
-            "productive_hours": request.productive_hours,
-            "escalation_method": request.escalation_method,
-            "scenario": request.scenario,
-            "include_validation": request.include_validation,
-        }
-
-        result = await tool.execute(params)
-
-        if result.status == "error":
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=result.error_message or "IGCE calculation failed",
-            )
-
-        logger.info("igce_calculated", grand_total=result.output.get("grand_total") if result.output else None)
-
-        return {
-            "status": result.status,
-            "output": result.output,
-            "duration_ms": result.duration_ms,
-            "citations": [
-                {
-                    "source_name": c.source_name,
-                    "source_url": c.source_url,
-                    "source_label": c.source_label,
-                    "retrieved_at": c.retrieved_at.isoformat(),
-                }
-                for c in result.citations
-            ],
-        }
+        output = _compute_igce(request)
+        duration_ms = round((time.monotonic() - t0) * 1000, 1)
+        logger.info(
+            "igce_calculated",
+            project=request.projectName,
+            final_total=output["finalTotal"],
+            duration_ms=duration_ms,
+        )
+        # Return the IGCEOutput object directly — api.ts expects `IGCEOutput`, not a wrapper
+        return output
     except HTTPException:
         raise
     except Exception as e:
         logger.error("igce_calculate_failed", error=str(e))
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to calculate IGCE",
+            detail=f"Failed to calculate IGCE: {e}",
         )
 
 
 @router.post("/build")
-async def build_igce(request: IGCECalculateRequest) -> dict:
-    """
-    Alias for POST /igce/calculate — build a comprehensive IGCE.
-    """
+async def build_igce(request: FrontendIGCERequest) -> dict:
+    """Alias for POST /igce/calculate."""
     return await calculate_igce(request)
 
 

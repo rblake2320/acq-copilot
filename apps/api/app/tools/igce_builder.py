@@ -5,6 +5,7 @@ from datetime import datetime
 from decimal import Decimal, ROUND_HALF_UP
 
 from app.tools.base import BaseTool, Citation
+from app.config import settings
 
 
 class IGCEBuilderTool(BaseTool):
@@ -249,15 +250,76 @@ class IGCEBuilderTool(BaseTool):
             "sensitivity": sensitivity
         }
 
+    # Known 2023 BLS OEWS national mean annual wages used as fallback.
+    # Source: https://www.bls.gov/oes/current/
+    _BLS_FALLBACK_ANNUAL: dict = {
+        "11-1011": 246440,
+        "11-2021": 166850,
+        "11-3021": 176450,
+        "13-1111": 102270,
+        "15-1211": 108990,
+        "15-1212": 120360,
+        "15-1231": 72560,
+        "15-1241": 131660,
+        "15-1244": 92970,
+        "15-1251": 99860,
+        "15-1252": 130160,
+        "15-1253": 105340,
+        "15-1254": 86040,
+        "15-1255": 84120,
+        "15-2051": 124490,
+        "15-2041": 108490,
+        # Legacy codes kept for backwards-compat
+        "11-2011": 124800,  # ~60/hr * 2080
+        "15-1121": 119600,  # ~57.5/hr * 2080
+    }
+
     async def _lookup_bls_wage(self, soc_code: str, area_code: str) -> float:
-        """Mock BLS wage lookup - returns hourly rate."""
-        mock_wages = {
-            "11-1011": 89.5,
-            "11-2011": 60.0,
-            "13-1111": 45.5,
-            "15-1121": 57.5,
-        }
-        return mock_wages.get(soc_code, 48.0)
+        """
+        Look up the BLS OEWS mean annual wage for a SOC code and convert to
+        an hourly rate (annual / 2080).
+
+        Tries the BLS Public Data API v2 first, then falls back to the
+        published 2023 OEWS national estimates, and finally returns a
+        generic $48/hr estimate when the SOC code is not found at all.
+        """
+        BLS_BASE = "https://api.bls.gov/publicAPI/v2"
+        PRODUCTIVE_HOURS = 2080
+
+        soc_clean = soc_code.replace("-", "")
+        area_norm = area_code.replace("US", "0000000")
+        if len(area_norm) < 7:
+            area_norm = area_norm.ljust(7, "0")
+        area_norm = area_norm[:7]
+        series_id = f"OEUM{area_norm}{soc_clean}03"
+
+        mean_annual: float | None = None
+        try:
+            payload: dict = {
+                "seriesid": [series_id],
+                "startyear": 2022,
+                "endyear": 2024,
+            }
+            if settings.BLS_API_KEY:
+                payload["registrationkey"] = settings.BLS_API_KEY
+            response = await self._client.post(
+                f"{BLS_BASE}/timeseries/data/",
+                json=payload,
+                timeout=15.0,
+            )
+            response.raise_for_status()
+            data = response.json()
+            series_list = data.get("Results", {}).get("series", [])
+            if series_list and series_list[0].get("data"):
+                pt = series_list[0]["data"][0]
+                mean_annual = float(pt.get("value", 0))
+        except Exception:
+            pass  # Fall through to static fallback
+
+        if not mean_annual:
+            mean_annual = self._BLS_FALLBACK_ANNUAL.get(soc_code, 99840)  # ~$48/hr default
+
+        return mean_annual / PRODUCTIVE_HOURS
 
     async def _lookup_per_diem(self, city: str, state: str, year: int) -> float:
         """Mock GSA per diem lookup - returns daily rate."""
