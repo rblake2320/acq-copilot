@@ -3,7 +3,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
-import { Send, Loader2, Eye, EyeOff } from "lucide-react";
+import { Send, Loader2, Eye, EyeOff, Zap } from "lucide-react";
 import { apiClient } from "@/lib/api";
 import { useStore } from "@/lib/store";
 import { Button } from "@/components/ui/button";
@@ -12,6 +12,15 @@ import { Card } from "@/components/ui/card";
 import { MessageBubble } from "./MessageBubble";
 import { ToolTracePanel } from "./ToolTracePanel";
 import { CitationsList } from "./CitationsList";
+
+const SUGGESTED_PROMPTS = [
+  "What does FAR Part 15 say about source selection procedures?",
+  "Explain the difference between sealed bidding and negotiated acquisition",
+  "What are the sole source justification requirements under FAR 6.302?",
+  "What BLS wage data exists for Software Developers nationally?",
+  "What is the GSA per diem rate for Washington DC?",
+  "How do I document IGCE methodology for the contract file per FAR 36.203?",
+];
 
 interface ChatFormInputs {
   message: string;
@@ -107,17 +116,42 @@ export function ChatInterface() {
       <div className="flex-1 overflow-y-auto p-6">
         {messages.length === 0 ? (
           <div className="flex h-full items-center justify-center">
-            <Card className="w-full max-w-2xl">
-              <div className="space-y-4 p-8 text-center">
+            <div className="w-full max-w-2xl space-y-6">
+              <div className="text-center">
                 <h3 className="text-xl font-semibold text-foreground dark:text-foreground">
                   Ask Acquisition Copilot
                 </h3>
-                <p className="text-muted-foreground dark:text-muted-foreground">
+                <p className="mt-1 text-muted-foreground dark:text-muted-foreground">
                   Questions about IGCE methodology, federal regulations, market
                   trends, or compliance requirements
                 </p>
               </div>
-            </Card>
+              <div className="grid grid-cols-2 gap-3">
+                {SUGGESTED_PROMPTS.map((prompt) => (
+                  <button
+                    key={prompt}
+                    type="button"
+                    disabled={sendMutation.isPending}
+                    onClick={() => {
+                      if (!activeConversationId) return;
+                      const userMessage = {
+                        id: `msg-${Date.now()}`,
+                        conversationId: activeConversationId,
+                        role: "user" as const,
+                        content: prompt,
+                        timestamp: new Date(),
+                      };
+                      addMessage(userMessage);
+                      sendMutation.mutate(prompt);
+                    }}
+                    className="flex items-start gap-2 rounded-lg border border-border bg-card p-3 text-left text-sm text-foreground shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground disabled:cursor-not-allowed disabled:opacity-50 dark:border-border dark:bg-card"
+                  >
+                    <Zap className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+                    <span>{prompt}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
           </div>
         ) : (
           <div className="space-y-4">

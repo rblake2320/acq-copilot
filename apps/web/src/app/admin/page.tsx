@@ -191,7 +191,11 @@ export default function AdminPage() {
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">
-              {toolHealth.filter((t) => t.status === "healthy").length}/{toolHealth.length}
+              {toolsLoading
+                ? <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                : toolHealth.length === 0
+                ? "-/-"
+                : `${toolHealth.filter((t) => t.status === "healthy").length}/${toolHealth.length}`}
             </div>
             <p className="text-xs text-muted-foreground">API tools operational</p>
           </CardContent>

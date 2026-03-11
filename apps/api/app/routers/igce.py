@@ -247,6 +247,128 @@ async def build_igce(request: FrontendIGCERequest) -> dict:
     return await calculate_igce(request)
 
 
+# ---------------------------------------------------------------------------
+# BLS Occupation list for keyword search
+# Source: BLS OEWS May 2023 national estimates (bls.gov/oes)
+# ---------------------------------------------------------------------------
+_BLS_OCCUPATIONS = [
+    ("11-1011", "Chief Executives", 246440, 206680),
+    ("11-1021", "General and Operations Managers", 130600, 107360),
+    ("11-3021", "Computer and Information Systems Managers", 176450, 169510),
+    ("11-3031", "Financial Managers", 166050, 139790),
+    ("11-9199", "Project Management Specialists", 98580, 94500),
+    ("13-1041", "Compliance Officers", 79510, 72310),
+    ("13-1071", "Human Resources Specialists", 67650, 62290),
+    ("13-1111", "Management Analysts", 102270, 95290),
+    ("13-1161", "Market Research Analysts", 78500, 68230),
+    ("13-2011", "Accountants and Auditors", 82320, 77250),
+    ("13-2051", "Financial Analysts", 101410, 96220),
+    ("15-1211", "Computer Systems Analysts", 108990, 102240),
+    ("15-1212", "Information Security Analysts", 120360, 112000),
+    ("15-1221", "Computer and Information Research Scientists", 145080, 136620),
+    ("15-1231", "Computer Network Support Specialists", 72560, 67640),
+    ("15-1241", "Computer Network Architects", 131660, 126900),
+    ("15-1244", "Network and Computer Systems Administrators", 92970, 90520),
+    ("15-1251", "Computer Programmers", 99860, 97800),
+    ("15-1252", "Software Developers", 130160, 124200),
+    ("15-1253", "Software Quality Assurance Analysts and Testers", 105340, 98220),
+    ("15-1254", "Web Developers", 86040, 80730),
+    ("15-1255", "Web and Digital Interface Designers", 84120, 79190),
+    ("15-1299", "Computer Occupations, All Other", 109020, 103690),
+    ("15-2011", "Actuaries", 120970, 113990),
+    ("15-2031", "Operations Research Analysts", 91040, 82360),
+    ("15-2041", "Statisticians", 108490, 99960),
+    ("15-2051", "Data Scientists", 124490, 108020),
+    ("17-2061", "Computer Hardware Engineers", 132360, 128170),
+    ("17-2072", "Electronics Engineers", 119320, 112620),
+    ("17-2141", "Mechanical Engineers", 99510, 96310),
+    ("17-2051", "Civil Engineers", 95110, 89940),
+    ("17-2112", "Industrial Engineers", 100990, 96350),
+    ("17-3023", "Electrical and Electronics Engineering Technologists", 69640, 67850),
+    ("19-1042", "Medical Scientists", 105720, 80820),
+    ("19-2041", "Environmental Scientists and Specialists", 78140, 73230),
+    ("19-3011", "Economists", 123820, 107870),
+    ("21-1022", "Healthcare Social Workers", 62840, 59870),
+    ("23-1011", "Lawyers", 165170, 135740),
+    ("23-2011", "Paralegals and Legal Assistants", 62290, 59200),
+    ("25-1099", "Postsecondary Teachers", 89980, 80840),
+    ("25-9099", "Education and Training Workers", 62440, 57350),
+    ("27-3041", "Editors", 77390, 67530),
+    ("27-3042", "Technical Writers", 81510, 79960),
+    ("33-1021", "First-Line Supervisors of Firefighting Workers", 84600, 78790),
+    ("41-4011", "Sales Representatives — Technical", 97860, 77250),
+    ("43-3031", "Bookkeeping, Accounting, Auditing Clerks", 47440, 45860),
+    ("43-6011", "Executive Secretaries and Executive Administrative Assistants", 63110, 60650),
+    ("43-9061", "Office Clerks, General", 37210, 36010),
+    ("47-2111", "Electricians", 60240, 60240),
+    ("49-9071", "Maintenance and Repair Workers, General", 45580, 43640),
+]
+
+
+@router.get("/bls-lookup")
+async def bls_lookup(q: str = "") -> dict:
+    """
+    Search BLS OEWS occupations by keyword.
+    Returns top 5 matches with mean/median hourly rates.
+    No API key required — uses built-in 2023 BLS OEWS data.
+    """
+    if not q.strip():
+        raise HTTPException(status_code=400, detail="q parameter required")
+
+    q_lower = q.lower()
+    results = []
+    for soc, title, mean_annual, median_annual in _BLS_OCCUPATIONS:
+        title_lower = title.lower()
+        score = 0
+        if q_lower == title_lower:
+            score = 20
+        elif title_lower.startswith(q_lower):
+            score = 12
+        elif q_lower in title_lower:
+            score = 8
+        else:
+            for word in q_lower.split():
+                if len(word) > 2 and word in title_lower:
+                    score += 3
+        if score > 0:
+            results.append({
+                "soc_code": soc,
+                "title": title,
+                "mean_annual": mean_annual,
+                "median_annual": median_annual,
+                "mean_hourly": round(mean_annual / 2080, 2),
+                "median_hourly": round(median_annual / 2080, 2),
+                "score": score,
+            })
+
+    results.sort(key=lambda x: -x["score"])
+    return {
+        "results": results[:5],
+        "query": q,
+        "source": "BLS OEWS May 2023",
+        "source_url": "https://www.bls.gov/oes/",
+    }
+
+
+@router.get("/perdiem-lookup")
+async def perdiem_lookup(city: str = "", state: str = "") -> dict:
+    """
+    Get GSA per diem rates for a city/state.
+    Uses live GSA API when key is configured, falls back to FY2025 published rates.
+    """
+    if not city.strip() or not state.strip():
+        raise HTTPException(status_code=400, detail="city and state are required")
+
+    from ..tools.gsa_perdiem import GSAPerDiemTool
+    tool = GSAPerDiemTool()
+    try:
+        result = await tool._lookup_rates({"city": city.strip(), "state": state.strip().upper(), "year": 2025})
+        return result
+    except Exception as e:
+        logger.error("perdiem_lookup_failed", city=city, state=state, error=str(e))
+        raise HTTPException(status_code=500, detail=f"Per diem lookup failed: {e}")
+
+
 @router.post("/export")
 async def export_igce(result: dict) -> StreamingResponse:
     """
