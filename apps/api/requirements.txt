@@ -17,3 +17,5 @@ opentelemetry-instrumentation-fastapi==0.42b0
 structlog==24.1.0
 python-multipart==0.0.6
 orjson==3.9.10
+openpyxl==3.1.5
+anthropic>=0.40.0

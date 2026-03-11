@@ -18,12 +18,21 @@ export function IGCEResults({ result }: IGCEResultsProps) {
 
   const handleExport = async () => {
     try {
-      const blob = await fetch(`/api/igce/${result.id}/export`).then((r) => r.blob());
+      const response = await fetch("/api/igce/export", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(result),
+      });
+      if (!response.ok) throw new Error(`Export failed: ${response.statusText}`);
+      const blob = await response.blob();
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
       a.download = `IGCE_${result.input.projectName}.xlsx`;
+      document.body.appendChild(a);
       a.click();
+      document.body.removeChild(a);
+      window.URL.revokeObjectURL(url);
     } catch (error) {
       console.error("Export failed:", error);
     }

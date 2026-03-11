@@ -1,10 +1,12 @@
 """IGCE (Independent Government Cost Estimate) router."""
+import io
 import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 import uuid
 import structlog
@@ -243,6 +245,197 @@ async def calculate_igce(request: FrontendIGCERequest) -> dict:
 async def build_igce(request: FrontendIGCERequest) -> dict:
     """Alias for POST /igce/calculate."""
     return await calculate_igce(request)
+
+
+@router.post("/export")
+async def export_igce(result: dict) -> StreamingResponse:
+    """
+    Accept an IGCEOutput JSON body and return a real .xlsx file.
+    The frontend POSTs the full result object here and downloads the blob.
+    """
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+        from openpyxl.utils import get_column_letter
+
+        wb = Workbook()
+
+        # ── helpers ──────────────────────────────────────────────────────────
+        HEADER_FILL = PatternFill("solid", fgColor="1F4E79")
+        HEADER_FONT = Font(bold=True, color="FFFFFF", size=11)
+        SUBHEADER_FILL = PatternFill("solid", fgColor="2E75B6")
+        SUBHEADER_FONT = Font(bold=True, color="FFFFFF", size=10)
+        TOTAL_FILL = PatternFill("solid", fgColor="D6E4F0")
+        TOTAL_FONT = Font(bold=True, size=10)
+        THIN = Side(style="thin")
+        BORDER = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
+
+        def _fmt_currency(ws, cell):
+            ws[cell].number_format = '$#,##0.00'
+
+        def _header(ws, row, col, text, fill=HEADER_FILL, font=HEADER_FONT):
+            c = ws.cell(row=row, column=col, value=text)
+            c.fill = fill
+            c.font = font
+            c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            c.border = BORDER
+            return c
+
+        # ── Sheet 1: Summary ─────────────────────────────────────────────────
+        ws = wb.active
+        ws.title = "Summary"
+        ws.column_dimensions["A"].width = 32
+        ws.column_dimensions["B"].width = 20
+
+        project_name = result.get("input", {}).get("projectName", "IGCE")
+        ws.merge_cells("A1:B1")
+        title_cell = ws["A1"]
+        title_cell.value = f"IGCE – {project_name}"
+        title_cell.font = Font(bold=True, size=14, color="1F4E79")
+        title_cell.alignment = Alignment(horizontal="center")
+
+        perf = result.get("input", {}).get("performancePeriod", {})
+        ws["A2"] = "Performance Period"
+        ws["B2"] = f"{perf.get('startDate','')[:10]}  →  {perf.get('endDate','')[:10]}"
+        ws["A2"].font = Font(italic=True)
+
+        ws.append([])
+
+        _header(ws, 4, 1, "Cost Element")
+        _header(ws, 4, 2, "Amount ($)")
+
+        rows = [
+            ("Labor Total",       result.get("laborTotal", 0)),
+            ("Travel Total",      result.get("travelTotal", 0)),
+            ("Subtotal",          result.get("laborTotal", 0) + result.get("travelTotal", 0)),
+            ("Contingency",       result.get("contingencyTotal", 0)),
+            ("Profit",            result.get("profitTotal", 0)),
+        ]
+        for i, (label, val) in enumerate(rows, start=5):
+            ws.cell(row=i, column=1, value=label).border = BORDER
+            c = ws.cell(row=i, column=2, value=val)
+            c.number_format = '$#,##0.00'
+            c.border = BORDER
+
+        # Final total row
+        total_row = 5 + len(rows)
+        tc = ws.cell(row=total_row, column=1, value="TOTAL ESTIMATE")
+        tc.fill = TOTAL_FILL
+        tc.font = TOTAL_FONT
+        tc.border = BORDER
+        vc = ws.cell(row=total_row, column=2, value=result.get("finalTotal", 0))
+        vc.number_format = '$#,##0.00'
+        vc.fill = TOTAL_FILL
+        vc.font = TOTAL_FONT
+        vc.border = BORDER
+
+        # Sensitivity
+        ws.append([])
+        sens_row = total_row + 2
+        _header(ws, sens_row, 1, "Sensitivity Analysis")
+        _header(ws, sens_row, 2, "Value ($)")
+        sensitivity = result.get("sensitivity", {})
+        for j, (key, label) in enumerate([("low", "Low (−10%)"), ("base", "Base"), ("high", "High (+10%)")], 1):
+            r = sens_row + j
+            ws.cell(row=r, column=1, value=label).border = BORDER
+            c = ws.cell(row=r, column=2, value=sensitivity.get(key, 0))
+            c.number_format = '$#,##0.00'
+            c.border = BORDER
+
+        # ── Sheet 2: Labor Breakdown ─────────────────────────────────────────
+        ws2 = wb.create_sheet("Labor Breakdown")
+        ws2.column_dimensions["A"].width = 12
+        ws2.column_dimensions["B"].width = 20
+        ws2.column_dimensions["C"].width = 28
+        ws2.column_dimensions["D"].width = 14
+        ws2.column_dimensions["E"].width = 14
+        ws2.column_dimensions["F"].width = 14
+
+        _header(ws2, 1, 1, "Year", SUBHEADER_FILL, SUBHEADER_FONT)
+        _header(ws2, 1, 2, "Category", SUBHEADER_FILL, SUBHEADER_FONT)
+        _header(ws2, 1, 3, "Labor Category", SUBHEADER_FILL, SUBHEADER_FONT)
+        _header(ws2, 1, 4, "Rate ($/hr)", SUBHEADER_FILL, SUBHEADER_FONT)
+        _header(ws2, 1, 5, "Hours", SUBHEADER_FILL, SUBHEADER_FONT)
+        _header(ws2, 1, 6, "Subtotal ($)", SUBHEADER_FILL, SUBHEADER_FONT)
+
+        lc_row = 2
+        for lc in result.get("input", {}).get("laborCategories", []):
+            for line in lc.get("lines", []):
+                ws2.cell(row=lc_row, column=1, value=line.get("year")).border = BORDER
+                ws2.cell(row=lc_row, column=2, value=lc.get("name")).border = BORDER
+                ws2.cell(row=lc_row, column=3, value=line.get("laborCategory")).border = BORDER
+                rc = ws2.cell(row=lc_row, column=4, value=line.get("rate", 0))
+                rc.number_format = '$#,##0.00'
+                rc.border = BORDER
+                ws2.cell(row=lc_row, column=5, value=line.get("hours", 0)).border = BORDER
+                sc = ws2.cell(row=lc_row, column=6, value=line.get("subtotal", 0))
+                sc.number_format = '$#,##0.00'
+                sc.border = BORDER
+                lc_row += 1
+
+        # Labor by year totals
+        if lc_row > 2:
+            ws2.append([])
+            lc_row += 1
+            _header(ws2, lc_row, 1, "Year", SUBHEADER_FILL, SUBHEADER_FONT)
+            _header(ws2, lc_row, 6, "Year Total ($)", SUBHEADER_FILL, SUBHEADER_FONT)
+            for year, amt in sorted(result.get("laborByYear", {}).items()):
+                lc_row += 1
+                ws2.cell(row=lc_row, column=1, value=int(year)).border = BORDER
+                c = ws2.cell(row=lc_row, column=6, value=amt)
+                c.number_format = '$#,##0.00'
+                c.border = BORDER
+
+        # ── Sheet 3: Assumptions ─────────────────────────────────────────────
+        ws3 = wb.create_sheet("Assumptions")
+        ws3.column_dimensions["A"].width = 28
+        ws3.column_dimensions["B"].width = 20
+
+        _header(ws3, 1, 1, "Assumption", SUBHEADER_FILL, SUBHEADER_FONT)
+        _header(ws3, 1, 2, "Value", SUBHEADER_FILL, SUBHEADER_FONT)
+
+        assumptions = result.get("input", {}).get("assumptions", {})
+        assumption_rows = [
+            ("Labor Escalation (%)", assumptions.get("laborEscalation", "")),
+            ("Travel Cost Inflation (%)", assumptions.get("travelCostInflation", "")),
+            ("Contingency (%)", assumptions.get("contingency", "")),
+            ("Profit Margin (%)", assumptions.get("profitMargin", "")),
+            ("Notes", assumptions.get("notes", "")),
+        ]
+        for i, (label, val) in enumerate(assumption_rows, start=2):
+            ws3.cell(row=i, column=1, value=label).border = BORDER
+            ws3.cell(row=i, column=2, value=val).border = BORDER
+
+        # Formulas audit trail
+        ws3.append([])
+        frow = 2 + len(assumption_rows) + 1
+        _header(ws3, frow, 1, "Formula", SUBHEADER_FILL, SUBHEADER_FONT)
+        _header(ws3, frow, 2, "Description", SUBHEADER_FILL, SUBHEADER_FONT)
+        for k, v in result.get("formulas", {}).items():
+            frow += 1
+            ws3.cell(row=frow, column=1, value=k).border = BORDER
+            ws3.cell(row=frow, column=2, value=v).border = BORDER
+
+        # ── Stream the workbook ───────────────────────────────────────────────
+        buf = io.BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+
+        safe_name = "".join(c if c.isalnum() or c in " _-" else "_" for c in project_name)
+        filename = f"IGCE_{safe_name}.xlsx"
+
+        return StreamingResponse(
+            buf,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    except Exception as e:
+        logger.error("igce_export_failed", error=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to export IGCE: {e}",
+        )
 
 
 class IGCEEstimateRequest(BaseModel):
