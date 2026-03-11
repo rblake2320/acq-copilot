@@ -1,12 +1,16 @@
 """Chat routing and message orchestration."""
-from typing import Optional
+from typing import Optional, Any
 from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel
 import uuid
+import asyncio
 import structlog
+import anthropic
 
+from ..config import settings
 from ..dependencies import get_db, get_cache
 from ..models.database import Conversation, Message, ToolRun, Citation
 from ..schemas.common import (
@@ -24,6 +28,182 @@ from ..services.cache import CacheService
 
 router = APIRouter()
 logger = structlog.get_logger(__name__)
+
+ACQUISITION_SYSTEM_PROMPT = (
+    "You are an expert federal acquisition assistant specializing in FAR/DFARS, "
+    "IGCE methodology, market research, and contracting best practices. "
+    "Answer questions clearly and cite relevant regulations when applicable."
+)
+
+
+# ── Schemas for the /send and /history endpoints ──────────────────────────────
+
+class SendRequest(BaseModel):
+    conversationId: str
+    message: str
+    context: Optional[dict] = None
+
+
+class MessageOut(BaseModel):
+    id: str
+    role: str
+    content: str
+    timestamp: str
+
+
+class SendResponse(BaseModel):
+    conversationId: str
+    messageId: str
+    content: str
+    toolRuns: list[Any] = []
+    citations: list[Any] = []
+
+
+@router.post("/send", response_model=SendResponse)
+async def chat_send(
+    request: SendRequest,
+    db: AsyncSession = Depends(get_db),
+) -> SendResponse:
+    """
+    Send a message and get a real Anthropic AI response.
+    Accepts the shape the frontend posts: {conversationId, message, context}.
+    Returns {conversationId, messageId, content, toolRuns, citations}.
+    """
+    try:
+        # ── 1. Find or create conversation ────────────────────────────────────
+        conv_id_str = request.conversationId
+        try:
+            conv_uuid = uuid.UUID(conv_id_str)
+        except ValueError:
+            conv_uuid = uuid.uuid5(uuid.NAMESPACE_DNS, conv_id_str)
+
+        result = await db.execute(
+            select(Conversation).where(Conversation.id == conv_uuid)
+        )
+        conversation = result.scalars().first()
+
+        if not conversation:
+            conversation = Conversation(
+                id=conv_uuid,
+                user_id=None,
+                title=request.message[:100],
+            )
+            db.add(conversation)
+            await db.flush()
+
+        # ── 2. Store user message ──────────────────────────────────────────────
+        user_msg = Message(
+            id=uuid.uuid4(),
+            conversation_id=conversation.id,
+            role="user",
+            content=request.message,
+        )
+        db.add(user_msg)
+        await db.flush()
+
+        # ── 3. Fetch last 20 messages for context ─────────────────────────────
+        hist_result = await db.execute(
+            select(Message)
+            .where(Message.conversation_id == conversation.id)
+            .order_by(Message.created_at.desc())
+            .limit(20)
+        )
+        history = list(reversed(hist_result.scalars().all()))
+
+        anthropic_messages = [
+            {"role": m.role, "content": m.content}
+            for m in history
+            if m.role in ("user", "assistant")
+        ]
+
+        # ── 4. Call Anthropic API ─────────────────────────────────────────────
+        if not settings.ANTHROPIC_API_KEY:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="ANTHROPIC_API_KEY is not configured",
+            )
+
+        async_client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
+
+        response_msg = await async_client.messages.create(
+            model="claude-opus-4-5",
+            max_tokens=2048,
+            system=ACQUISITION_SYSTEM_PROMPT,
+            messages=anthropic_messages,
+        )
+        assistant_text = response_msg.content[0].text
+
+        # ── 5. Store assistant message ─────────────────────────────────────────
+        asst_msg = Message(
+            id=uuid.uuid4(),
+            conversation_id=conversation.id,
+            role="assistant",
+            content=assistant_text,
+        )
+        db.add(asst_msg)
+        await db.flush()
+
+        await db.commit()
+        await db.refresh(asst_msg)
+
+        logger.info("chat_send_success", conversation_id=str(conversation.id))
+
+        return SendResponse(
+            conversationId=str(conversation.id),
+            messageId=str(asst_msg.id),
+            content=assistant_text,
+            toolRuns=[],
+            citations=[],
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("chat_send_error", error=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to process message: {str(e)}",
+        )
+
+
+@router.get("/history/{conversation_id}", response_model=list[MessageOut])
+async def chat_history(
+    conversation_id: str,
+    db: AsyncSession = Depends(get_db),
+) -> list[MessageOut]:
+    """
+    Return messages for a conversation as a flat array.
+    Accepts conversation_id as a string (UUID or deterministic UUID from string).
+    Returns [{id, role, content, timestamp}] matching the frontend Message type.
+    """
+    try:
+        try:
+            conv_uuid = uuid.UUID(conversation_id)
+        except ValueError:
+            conv_uuid = uuid.uuid5(uuid.NAMESPACE_DNS, conversation_id)
+
+        result = await db.execute(
+            select(Message)
+            .where(Message.conversation_id == conv_uuid)
+            .order_by(Message.created_at)
+        )
+        messages = result.scalars().all()
+
+        return [
+            MessageOut(
+                id=str(m.id),
+                role=m.role,
+                content=m.content,
+                timestamp=m.created_at.isoformat(),
+            )
+            for m in messages
+        ]
+    except Exception as e:
+        logger.error("chat_history_error", error=str(e))
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to retrieve history",
+        )
 
 
 @router.post("/", response_model=ChatResponse)
