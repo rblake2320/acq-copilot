@@ -166,7 +166,7 @@ FastAPI backend
 
 ---
 
-### 🔄 Phase 2: FAR RAG Engine (IN PROGRESS — Killer Differentiator)
+### ✅ Phase 2: FAR RAG Engine (COMPLETE — commit 665d712)
 **Goal**: Semantic search over full FAR/DFARS — beats acquisition.gov keyword search
 
 **Data source**: `https://github.com/GSA/GSA-Acquisition-FAR` (public DITA XML, 53 parts)
@@ -195,7 +195,7 @@ CREATE INDEX ON far_sections USING hnsw (embedding vector_cosine_ops);
 
 ---
 
-### 🔜 Phase 3: SAM.gov Opportunity Intelligence
+### ✅ Phase 3: SAM.gov Opportunity Intelligence (COMPLETE — commit 3234824)
 **Goal**: Real contract opportunity search + semantic matching
 
 **API**: `https://api.sam.gov/opportunities/v2/search` (free, key from api.data.gov)
@@ -209,7 +209,7 @@ CREATE INDEX ON far_sections USING hnsw (embedding vector_cosine_ops);
 
 ---
 
-### 🔜 Phase 4: Compliance Checker
+### ✅ Phase 4: Compliance Checker (COMPLETE — commit 8f669e6)
 **Goal**: Upload solicitation PDF → FAR compliance report (nobody else does this)
 
 **New files:**
@@ -220,7 +220,7 @@ CREATE INDEX ON far_sections USING hnsw (embedding vector_cosine_ops);
 
 ---
 
-### 🔜 Phase 5: Acquisition Planning Assistant
+### ✅ Phase 5: Acquisition Planning Assistant (COMPLETE — commit cb7b5eb)
 **Goal**: "I need to buy X" → complete acquisition strategy
 
 **New files:**
@@ -232,7 +232,7 @@ CREATE INDEX ON far_sections USING hnsw (embedding vector_cosine_ops);
 
 ---
 
-### 🔜 Phase 6: Price Reasonableness Engine
+### ✅ Phase 6: Price Reasonableness Engine (COMPLETE — commit cb7b5eb)
 **Goal**: Cross-source price analysis (BLS + CALC+ + USASpending → confidence score)
 
 **New files:**
@@ -242,7 +242,7 @@ CREATE INDEX ON far_sections USING hnsw (embedding vector_cosine_ops);
 
 ---
 
-### 🔜 Phase 7: Auth + Production Hardening
+### 🔄 Phase 7: Auth + Production Hardening (NEXT)
 - JWT authentication, role-based access
 - Multi-tenancy (organization/team)
 - Rate limiting per user tier
