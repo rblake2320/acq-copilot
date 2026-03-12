@@ -58,6 +58,9 @@ class Settings(BaseSettings):
     REGULATIONS_GOV_API_KEY: Optional[str] = Field(
         default=None, description="Regulations.gov API key"
     )
+    SAM_API_KEY: Optional[str] = Field(
+        default=None, description="SAM.gov API key (free at api.data.gov)"
+    )
     CONGRESS_GOV_API_KEY: Optional[str] = Field(default=None, description="Congress.gov API key")
     CENSUS_API_KEY: Optional[str] = Field(default=None, description="US Census Bureau API key")
     REGULATIONS_GOV_BASE_URL: str = Field(

@@ -15,6 +15,7 @@ from app.tools.gsa_perdiem import GSAPerDiemTool
 from app.tools.gsa_calc import GSACalcTool
 from app.tools.regulations_gov import RegulationsGovTool
 from app.tools.igce_builder import IGCEBuilderTool
+from app.tools.sam_opportunities import SamSearchTool
 
 
 # Tool registry mapping
@@ -27,6 +28,7 @@ TOOL_REGISTRY: Dict[str, Type[BaseTool]] = {
     "gsa.calc.search_rates": GSACalcTool,
     "regulations.search_dockets": RegulationsGovTool,
     "igce.build": IGCEBuilderTool,
+    "sam.search_opportunities": SamSearchTool,
 }
 
 
@@ -99,6 +101,7 @@ __all__ = [
     "GSACalcTool",
     "RegulationsGovTool",
     "IGCEBuilderTool",
+    "SamSearchTool",
     "TOOL_REGISTRY",
     "register_all_tools",
     "get_tool_by_id",

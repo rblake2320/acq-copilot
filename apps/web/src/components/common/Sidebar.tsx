@@ -11,6 +11,7 @@ import {
   Settings,
   ChevronLeft,
   ChevronRight,
+  Building2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useStore } from "@/lib/store";
@@ -50,6 +51,12 @@ export function Sidebar() {
       href: "/far-search",
       icon: BookOpen,
       description: "Semantic search over FAR and DFARS regulations",
+    },
+    {
+      name: "Opportunities",
+      href: "/opportunities",
+      icon: Building2,
+      description: "Search active SAM.gov contract opportunities",
     },
     {
       name: "Admin",

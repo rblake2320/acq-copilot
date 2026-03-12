@@ -10,6 +10,7 @@ import {
   TrendingUp,
   Clock,
   ArrowRight,
+  Building2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -52,6 +53,13 @@ export default function Dashboard() {
       description: "Semantic search over all 53 FAR parts",
       href: "/far-search",
       color: "bg-cyan-500/10 text-cyan-600 dark:text-cyan-400",
+    },
+    {
+      icon: Building2,
+      title: "Opportunities",
+      description: "Search active SAM.gov contract opportunities",
+      href: "/opportunities",
+      color: "bg-emerald-500/10 text-emerald-400",
     },
   ];
 

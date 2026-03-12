@@ -120,7 +120,9 @@ def _map_tool_id(router_tool_id: str) -> Optional[str]:
         "far_search": None,
         "bls_wage": "bls.oews",
         "gsa_perdiem": "gsa.perdiem",
-        "market_research": "usaspending.search",
+        "market_research": "sam.search_opportunities",  # SAM.gov for active opportunity research
+        "sam.search_opportunities": "sam.search_opportunities",
+        "sam_search": "sam.search_opportunities",
         "federalregister_search": "federal_register.search",
         "general_knowledge": None,  # Handled by LLM directly
     }
