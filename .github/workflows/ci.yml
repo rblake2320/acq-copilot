@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  push:
+    branches: [v2, main]
+  pull_request:
+    branches: [v2, main]
+
+jobs:
+  backend:
+    name: Backend (FastAPI)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/api
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Check imports compile
+        env:
+          DATABASE_URL: postgresql+asyncpg://postgres:password@localhost:5432/test
+          REDIS_URL: redis://localhost:6379/0
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ENVIRONMENT: dev
+        run: |
+          python -c "
+          from app.main import app
+          from app.routers.chat import router
+          from app.routers.rag import router as rag
+          from app.routers.opportunities import router as opp
+          from app.routers.compliance import router as comp
+          from app.routers.planning import router as plan
+          from app.routers.pricing import router as price
+          from app.tools.far_rag import FARRagTool
+          from app.tools.sam_opportunities import SamSearchTool
+          from app.tools.compliance_checker import ComplianceCheckerTool
+          from app.tools.threshold_checker import ThresholdCheckerTool
+          from app.tools.vehicle_recommender import VehicleRecommenderTool
+          from app.tools.price_reasonableness import PriceReasonablenessTool
+          print('All imports OK')
+          "
+
+  frontend:
+    name: Frontend (Next.js)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/web
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type check
+        run: npm run type-check || npx tsc --noEmit
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build
+        run: npm run build
+        env:
+          NEXT_PUBLIC_API_URL: http://localhost:8000
