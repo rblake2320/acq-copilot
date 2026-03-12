@@ -3,7 +3,6 @@
 import React, { useState } from "react";
 import { Citation } from "@/types";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
 import { ExternalLink, ChevronUp, ChevronDown } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 
@@ -71,20 +70,14 @@ export function CitationsList({ citations }: CitationsListProps) {
                       </p>
                     )}
                     <div className="flex items-center justify-end">
-                      <Button
-                        variant="link"
-                        size="sm"
-                        asChild
-                        className="p-0 text-xs text-primary dark:text-primary"
+                      <a
+                        href={citation.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="p-0 text-xs text-primary underline-offset-4 hover:underline dark:text-primary"
                       >
-                        <a
-                          href={citation.url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                        >
-                          Full article
-                        </a>
-                      </Button>
+                        Full article
+                      </a>
                     </div>
                   </CardContent>
                 )}

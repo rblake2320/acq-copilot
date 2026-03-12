@@ -94,9 +94,9 @@ export function MessageBubble({ message }: MessageBubbleProps) {
         {/* Tool Runs */}
         {message.toolRuns && message.toolRuns.length > 0 && !isUser && (
           <div className="mt-3 space-y-1">
-            {message.toolRuns.map((toolRunId) => (
-              <Badge key={toolRunId} variant="secondary" className="text-xs">
-                {toolRunId}
+            {message.toolRuns.map((run, idx) => (
+              <Badge key={run.id ?? String(idx)} variant="secondary" className="text-xs">
+                {run.name ?? run.toolName}
               </Badge>
             ))}
           </div>

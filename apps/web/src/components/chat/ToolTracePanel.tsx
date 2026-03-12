@@ -135,7 +135,7 @@ export function ToolTracePanel({ toolRuns }: ToolTracePanelProps) {
                     </pre>
                   </div>
 
-                  {run.output && (
+                  {!!run.output && (
                     <div>
                       <h4 className="mb-2 text-xs font-semibold text-foreground dark:text-foreground">
                         Output

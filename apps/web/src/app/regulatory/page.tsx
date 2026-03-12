@@ -88,7 +88,7 @@ export default function RegulatoryPage() {
 
       {/* Tabs */}
       {query.trim() && (
-        <Tabs defaultValue={activeTab} onChange={setActiveTab} className="space-y-4">
+        <Tabs defaultValue={activeTab} onValueChange={setActiveTab} className="space-y-4">
           <TabsList className="dark:bg-muted">
             <TabsTrigger value="all">All Results</TabsTrigger>
             <TabsTrigger value="fr">Federal Register</TabsTrigger>

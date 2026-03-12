@@ -20,14 +20,20 @@ function useTabs() {
 
 interface TabsProps extends React.HTMLAttributes<HTMLDivElement> {
   defaultValue: string;
+  onValueChange?: (value: string) => void;
 }
 
 const Tabs = React.forwardRef<HTMLDivElement, TabsProps>(
-  ({ defaultValue, className, ...props }, ref) => {
+  ({ defaultValue, onValueChange, className, ...props }, ref) => {
     const [activeTab, setActiveTab] = React.useState(defaultValue);
 
+    const handleSetActiveTab = (tab: string) => {
+      setActiveTab(tab);
+      onValueChange?.(tab);
+    };
+
     return (
-      <TabsContext.Provider value={{ activeTab, setActiveTab }}>
+      <TabsContext.Provider value={{ activeTab, setActiveTab: handleSetActiveTab }}>
         <div ref={ref} className={cn("w-full", className)} {...props} />
       </TabsContext.Provider>
     );

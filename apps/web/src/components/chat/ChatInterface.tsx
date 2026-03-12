@@ -49,17 +49,17 @@ export function ChatInterface() {
   }, [messages]);
 
   // Load conversation history
-  useQuery({
+  const { data: historyData } = useQuery({
     queryKey: ["chat-history", activeConversationId],
     queryFn: async () => {
       if (!activeConversationId) return [];
       return apiClient.chat.getHistory(activeConversationId);
     },
-    onSuccess: (data) => {
-      useStore.setState({ messages: data });
-    },
     enabled: !!activeConversationId,
   });
+  useEffect(() => {
+    if (historyData) useStore.setState({ messages: historyData });
+  }, [historyData]);
 
   const sendMutation = useMutation({
     mutationFn: async (content: string) => {
