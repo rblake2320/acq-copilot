@@ -145,7 +145,7 @@ FastAPI backend
 - [ ] Extract and verify all existing code compiles
 - [ ] Set up local dev environment
 
-### 🔄 Phase 1: Wire the Brain (Highest Leverage — zero new APIs)
+### ✅ Phase 1: Wire the Brain (COMPLETE — commit 5771b54)
 **Goal**: Route `POST /chat/send` through orchestration pipeline instead of direct Anthropic call
 
 **Files to modify:**
@@ -166,7 +166,7 @@ FastAPI backend
 
 ---
 
-### 🔜 Phase 2: FAR RAG Engine (Killer Differentiator)
+### 🔄 Phase 2: FAR RAG Engine (IN PROGRESS — Killer Differentiator)
 **Goal**: Semantic search over full FAR/DFARS — beats acquisition.gov keyword search
 
 **Data source**: `https://github.com/GSA/GSA-Acquisition-FAR` (public DITA XML, 53 parts)

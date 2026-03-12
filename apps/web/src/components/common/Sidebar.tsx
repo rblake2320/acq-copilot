@@ -46,6 +46,12 @@ export function Sidebar() {
       description: "USASpending analysis and competitive intelligence",
     },
     {
+      name: "FAR Search",
+      href: "/far-search",
+      icon: BookOpen,
+      description: "Semantic search over FAR and DFARS regulations",
+    },
+    {
       name: "Admin",
       href: "/admin",
       icon: Settings,

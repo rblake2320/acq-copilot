@@ -3,6 +3,7 @@ from datetime import datetime
 from typing import Optional
 from sqlalchemy import (
     Column,
+    Integer,
     String,
     Text,
     DateTime,
@@ -201,4 +202,29 @@ class AuditEvent(Base):
         Index("ix_audit_events_event_type", "event_type"),
         Index("ix_audit_events_entity_type", "entity_type"),
         Index("ix_audit_events_created_at", "created_at"),
+    )
+
+
+class FARSection(Base):
+    """FAR/DFARS section for RAG search."""
+
+    __tablename__ = "far_sections"
+
+    id: int = mapped_column(Integer, primary_key=True, autoincrement=True)
+    regulation: str = mapped_column(String(20), nullable=False)  # 'FAR', 'DFARS', 'GSAM'
+    part: int = mapped_column(Integer, nullable=False)
+    subpart: Optional[str] = mapped_column(String(20), nullable=True)
+    section: str = mapped_column(String(50), nullable=False)  # e.g. '15.404-1'
+    title: str = mapped_column(String(500), nullable=False)
+    content: str = mapped_column(Text, nullable=False)
+    effective_date: Optional[datetime] = mapped_column(DateTime, nullable=True)
+    source_url: Optional[str] = mapped_column(String(1000), nullable=True)
+    chunk_index: int = mapped_column(Integer, default=0, nullable=False)  # for multi-chunk sections
+    embedding_json: Optional[str] = mapped_column(Text, nullable=True)  # 768-dim vector as JSON string
+    created_at: datetime = mapped_column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        Index("ix_far_sections_regulation", "regulation"),
+        Index("ix_far_sections_part", "part"),
+        Index("ix_far_sections_section", "section"),
     )
