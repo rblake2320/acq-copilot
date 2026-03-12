@@ -21,7 +21,6 @@ from .routers.opportunities import router as opportunities_router
 from .routers.compliance import router as compliance_router
 from .routers.planning import router as planning_router
 from .routers.pricing import router as pricing_router
-from .routers.auth import router as auth_router
 from .models.database import Base
 
 # Configure structured logging
@@ -180,7 +179,7 @@ def create_app() -> FastAPI:
     app.include_router(compliance_router, prefix="/api/compliance", tags=["compliance"])
     app.include_router(planning_router, prefix="/api/planning", tags=["planning"])
     app.include_router(pricing_router, prefix="/api/pricing", tags=["pricing"])
-    app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
+    # auth router paused — re-enable when ready for Phase 7
 
     # Root endpoint
     @app.get("/")
