@@ -142,7 +142,7 @@ class ThresholdCheckerTool(BaseTool):
     async def run(self, params: dict) -> ToolRunResult:
         start = time.time()
         contract_value = params.get("contract_value")
-        threshold_name = params.get("threshold_name", "").lower()
+        threshold_name = (params.get("threshold_name") or "").lower()
 
         try:
             all_thresholds = list(FAR_THRESHOLDS.values())
@@ -206,6 +206,9 @@ class ThresholdCheckerTool(BaseTool):
                 status="error",
                 error_message=str(e),
             )
+
+    def build_citations(self, params: dict, output) -> list:
+        return []
 
     async def healthcheck(self) -> dict:
         return {"tool_id": self.id, "status": "ok", "name": self.name}

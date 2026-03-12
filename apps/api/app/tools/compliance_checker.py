@@ -299,6 +299,9 @@ class ComplianceCheckerTool(BaseTool):
                 error_message=str(e),
             )
 
+    def build_citations(self, params: dict, output) -> list:
+        return []
+
     async def healthcheck(self) -> dict:
         return {"tool_id": self.id, "status": "ok", "name": self.name}
 

@@ -158,9 +158,9 @@ class VehicleRecommenderTool(BaseTool):
 
     async def run(self, params: dict) -> ToolRunResult:
         start = time.time()
-        description = params.get("description", "").lower()
-        naics = params.get("naics_code", "")
-        value = params.get("estimated_value", 0)
+        description = (params.get("description") or "").lower()
+        naics = params.get("naics_code") or ""
+        value = params.get("estimated_value") or 0
         prefer_sb = params.get("small_business", False)
         is_dod = params.get("dod", False)
 
@@ -241,6 +241,9 @@ class VehicleRecommenderTool(BaseTool):
                 status="error",
                 error_message=str(e),
             )
+
+    def build_citations(self, params: dict, output) -> list:
+        return []
 
     async def healthcheck(self) -> dict:
         return {"tool_id": self.id, "status": "ok", "name": self.name}
