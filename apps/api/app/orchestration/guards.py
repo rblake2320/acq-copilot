@@ -92,7 +92,7 @@ class SourceGroundingGuard:
             for match in matches:
                 # Check if properly attributed
                 context = answer_text[max(0, match.start()-50):match.end()+50]
-                if not self._is_properly_attributed(context):
+                if not SourceGroundingGuard._is_properly_attributed(context):
                     issues.append(GroundingIssue(
                         claim=match.group(),
                         issue_type="speculative",
