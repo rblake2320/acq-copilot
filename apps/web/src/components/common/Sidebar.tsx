@@ -13,6 +13,8 @@ import {
   ChevronRight,
   Building2,
   Shield,
+  Zap,
+  DollarSign,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useStore } from "@/lib/store";
@@ -64,6 +66,18 @@ export function Sidebar() {
       href: "/compliance",
       icon: Shield,
       description: "FAR/DFARS clause compliance checker for solicitations",
+    },
+    {
+      name: "Planning",
+      href: "/planning",
+      icon: Zap,
+      description: "Acquisition strategy, thresholds, and contract vehicle recommendations",
+    },
+    {
+      name: "Price Analysis",
+      href: "/pricing",
+      icon: DollarSign,
+      description: "Price reasonableness analysis using BLS OEWS and GSA CALC+ data",
     },
     {
       name: "Admin",

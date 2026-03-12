@@ -12,6 +12,8 @@ import {
   ArrowRight,
   Building2,
   Shield,
+  Zap,
+  DollarSign,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -68,6 +70,20 @@ export default function Dashboard() {
       description: "FAR/DFARS clause compliance validator for solicitations",
       href: "/compliance",
       color: "bg-purple-500/10 text-purple-600 dark:text-purple-400",
+    },
+    {
+      icon: Zap,
+      title: "Acquisition Planning",
+      description: "Get contract vehicle recommendations and FAR threshold analysis for any requirement",
+      href: "/planning",
+      color: "bg-yellow-500/10 text-yellow-600 dark:text-yellow-400",
+    },
+    {
+      icon: DollarSign,
+      title: "Price Analysis",
+      description: "Cross-source price reasonableness using BLS OEWS and GSA CALC+ labor rates",
+      href: "/pricing",
+      color: "bg-green-500/10 text-green-600 dark:text-green-400",
     },
   ];
 
