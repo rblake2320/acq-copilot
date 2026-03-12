@@ -176,17 +176,20 @@ export interface AwardResult {
   vendorName: string;
   awardAmount: number;
   competitiveRange: boolean;
-  awardDate: Date;
+  awardDate: string;
   contractType: string;
   naicsCode: string;
+  description?: string;
+  agencyName?: string;
+  url?: string;
 }
 
 export interface RegulatoryResult {
-  citationId: string;
+  citationId?: string;
   title: string;
   regulation: string;
-  effectiveDate: Date;
-  source: "FR" | "eCFR" | "Regulations.gov";
+  effectiveDate: string;
+  source: "FR" | "eCFR" | "Regulations.gov" | string;
   url: string;
   summary: string;
 }

@@ -147,7 +147,7 @@ export default function RegulatoryPage() {
                       {result.summary}
                     </p>
                     <div className="flex items-center gap-4 text-xs text-muted-foreground dark:text-muted-foreground">
-                      <span>Effective: {formatDate(new Date(result.effectiveDate))}</span>
+                      <span>Effective: {formatDate(result.effectiveDate)}</span>
                     </div>
                   </CardContent>
                 </Card>

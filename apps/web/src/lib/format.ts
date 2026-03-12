@@ -15,6 +15,9 @@ export function formatNumber(value: number): string {
   return new Intl.NumberFormat("en-US").format(value);
 }
 
-export function formatDate(date: Date): string {
-  return new Intl.DateTimeFormat("en-US").format(date);
+export function formatDate(date: Date | string | null | undefined): string {
+  if (!date) return "N/A";
+  const d = date instanceof Date ? date : new Date(date);
+  if (isNaN(d.getTime())) return "N/A";
+  return new Intl.DateTimeFormat("en-US").format(d);
 }

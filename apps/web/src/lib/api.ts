@@ -189,31 +189,104 @@ class APIClient {
 
   regulatory = {
     search: async (query: string): Promise<RegulatoryResult[]> => {
-      return this.request<RegulatoryResult[]>("/regulatory/search", {
+      const raw = await this.request<Record<string, unknown>>("/regulatory/search", {
         method: "POST",
         body: JSON.stringify({ query }),
       });
+      // API returns { query, federal_register: {documents:[...]}, ecfr: {...}, regulations_gov: {...} }
+      // Normalize into a flat array for the UI
+      if (Array.isArray(raw)) return raw as RegulatoryResult[];
+      const results: RegulatoryResult[] = [];
+      const fr = (raw?.federal_register as Record<string, unknown>)?.documents;
+      if (Array.isArray(fr)) {
+        fr.forEach((d: Record<string, unknown>) => results.push({
+          title: String(d.title || ""),
+          summary: String(d.abstract || d.summary || ""),
+          url: String(d.html_url || d.url || ""),
+          source: "FR",
+          regulation: String(d.document_number || ""),
+          effectiveDate: String(d.publication_date || d.effective_on || new Date().toISOString()),
+        }));
+      }
+      const ecfr = raw?.ecfr as Record<string, unknown>;
+      if (ecfr && !ecfr.error) {
+        const sections = Array.isArray(ecfr.sections) ? ecfr.sections as Record<string, unknown>[] : (ecfr.title ? [ecfr] : []);
+        sections.forEach((s) => results.push({
+          title: String(s.label || s.title || "eCFR Section"),
+          summary: String(s.subject_text || s.text || ""),
+          url: `https://www.ecfr.gov/`,
+          source: "eCFR",
+          regulation: String(s.identifier || ""),
+          effectiveDate: new Date().toISOString(),
+        }));
+      }
+      const rg = (raw?.regulations_gov as Record<string, unknown>)?.data;
+      if (Array.isArray(rg)) {
+        rg.forEach((d: Record<string, unknown>) => {
+          const attrs = (d.attributes as Record<string, unknown>) || {};
+          results.push({
+            title: String(attrs.title || ""),
+            summary: String(attrs.summary || ""),
+            url: `https://www.regulations.gov/document/${d.id}`,
+            source: "Regulations.gov",
+            regulation: String(d.id || ""),
+            effectiveDate: String(attrs.modifyDate || new Date().toISOString()),
+          });
+        });
+      }
+      return results;
     },
 
     getFederalRegister: async (query: string): Promise<RegulatoryResult[]> => {
-      return this.request<RegulatoryResult[]>("/regulatory/federal-register", {
-        method: "POST",
-        body: JSON.stringify({ query }),
-      });
+      const raw = await this.request<Record<string, unknown>>("/regulatory/federal-register", {
+        params: { query } as unknown,
+      } as RequestInit);
+      if (Array.isArray(raw)) return raw as RegulatoryResult[];
+      const docs = (raw?.documents as Record<string, unknown>[]) || [];
+      return docs.map((d) => ({
+        title: String(d.title || ""),
+        summary: String(d.abstract || ""),
+        url: String(d.html_url || ""),
+        source: "FR",
+        regulation: String(d.document_number || ""),
+        effectiveDate: String(d.publication_date || new Date().toISOString()),
+      }));
     },
 
     getECFR: async (titleNumber: number): Promise<RegulatoryResult[]> => {
-      return this.request<RegulatoryResult[]>(
+      const raw = await this.request<Record<string, unknown>>(
         `/regulatory/ecfr/${titleNumber}`
       );
+      if (Array.isArray(raw)) return raw as RegulatoryResult[];
+      return raw ? [{
+        title: String((raw as Record<string, unknown>).label || `eCFR Title ${titleNumber}`),
+        summary: String((raw as Record<string, unknown>).subject_text || ""),
+        url: `https://www.ecfr.gov/title-${titleNumber}`,
+        source: "eCFR",
+        regulation: `Title ${titleNumber}`,
+        effectiveDate: new Date().toISOString(),
+      }] : [];
     },
 
     getRegulationsGov: async (
       documentType: string
     ): Promise<RegulatoryResult[]> => {
-      return this.request<RegulatoryResult[]>(
+      const raw = await this.request<Record<string, unknown>>(
         `/regulatory/regulations-gov?type=${documentType}`
       );
+      if (Array.isArray(raw)) return raw as RegulatoryResult[];
+      const data = (raw?.data as Record<string, unknown>[]) || [];
+      return data.map((d) => {
+        const attrs = (d.attributes as Record<string, unknown>) || {};
+        return {
+          title: String(attrs.title || ""),
+          summary: String(attrs.summary || ""),
+          url: `https://www.regulations.gov/document/${d.id}`,
+          source: "Regulations.gov",
+          regulation: String(d.id || ""),
+          effectiveDate: String(attrs.modifyDate || new Date().toISOString()),
+        };
+      });
     },
   };
 
@@ -226,10 +299,29 @@ class APIClient {
         agency?: string;
       }
     ): Promise<AwardResult[]> => {
-      return this.request<AwardResult[]>("/market-research/usa-spending", {
+      const raw = await this.request<Record<string, unknown>>("/market-research/usa-spending", {
         method: "POST",
         body: JSON.stringify({ query, filters }),
       });
+      // API returns { status, output: { awards: [...], total_count, page, limit }, duration_ms, citations }
+      if (Array.isArray(raw)) return raw as AwardResult[];
+      const output = raw?.output as Record<string, unknown>;
+      const awards = output?.awards;
+      if (Array.isArray(awards)) {
+        return (awards as Record<string, unknown>[]).map((a) => ({
+          awardId: String(a.award_id || a.piid || ""),
+          vendorName: String(a.recipient_name || ""),
+          awardAmount: Number(a.award_amount || 0),
+          competitiveRange: true,
+          awardDate: String(a.period_start || ""),
+          contractType: String(a.award_type || "Contract"),
+          naicsCode: String(a.naics_code || ""),
+          description: String(a.description || ""),
+          agencyName: String(a.agency_name || ""),
+          url: String(a.usaspending_url || ""),
+        } as AwardResult));
+      }
+      return [];
     },
 
     getAwardTrends: async (naicsCode: string): Promise<unknown> => {
