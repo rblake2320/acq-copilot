@@ -18,6 +18,7 @@ from .routers import chat, tools, igce, regulatory, admin
 from .routers import market_research
 from .routers.rag import router as rag_router
 from .routers.opportunities import router as opportunities_router
+from .routers.compliance import router as compliance_router
 from .models.database import Base
 
 # Configure structured logging
@@ -173,6 +174,7 @@ def create_app() -> FastAPI:
     app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
     app.include_router(rag_router, prefix="/api/rag", tags=["rag"])
     app.include_router(opportunities_router, prefix="/api/opportunities", tags=["opportunities"])
+    app.include_router(compliance_router, prefix="/api/compliance", tags=["compliance"])
 
     # Root endpoint
     @app.get("/")

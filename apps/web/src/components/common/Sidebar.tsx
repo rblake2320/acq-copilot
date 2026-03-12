@@ -12,6 +12,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Building2,
+  Shield,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useStore } from "@/lib/store";
@@ -57,6 +58,12 @@ export function Sidebar() {
       href: "/opportunities",
       icon: Building2,
       description: "Search active SAM.gov contract opportunities",
+    },
+    {
+      name: "Compliance",
+      href: "/compliance",
+      icon: Shield,
+      description: "FAR/DFARS clause compliance checker for solicitations",
     },
     {
       name: "Admin",

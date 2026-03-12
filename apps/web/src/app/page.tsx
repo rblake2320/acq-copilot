@@ -11,6 +11,7 @@ import {
   Clock,
   ArrowRight,
   Building2,
+  Shield,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -60,6 +61,13 @@ export default function Dashboard() {
       description: "Search active SAM.gov contract opportunities",
       href: "/opportunities",
       color: "bg-emerald-500/10 text-emerald-400",
+    },
+    {
+      icon: Shield,
+      title: "Compliance Check",
+      description: "FAR/DFARS clause compliance validator for solicitations",
+      href: "/compliance",
+      color: "bg-purple-500/10 text-purple-600 dark:text-purple-400",
     },
   ];
 
