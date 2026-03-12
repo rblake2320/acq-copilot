@@ -138,6 +138,32 @@ async def chat_send(
         db.add(asst_msg)
         await db.flush()
 
+        # ── 6. Persist tool runs + citations for training data capture ─────────
+        for tr in pipeline_result.tool_runs:
+            tool_run_row = ToolRun(
+                id=uuid.uuid4(),
+                conversation_id=conversation.id,
+                tool_id=tr.tool_id,
+                input_json=tr.input_params or {},
+                output_json=tr.output if isinstance(tr.output, dict) else {"result": str(tr.output)},
+                status=tr.status or "success",
+                duration_ms=tr.duration_ms or 0.0,
+                error_message=tr.error if hasattr(tr, "error") else None,
+            )
+            db.add(tool_run_row)
+            await db.flush()
+
+            for c in getattr(tr, "citations", []):
+                db.add(Citation(
+                    id=uuid.uuid4(),
+                    tool_run_id=tool_run_row.id,
+                    source_name=getattr(c, "source_name", ""),
+                    source_url=getattr(c, "source_url", ""),
+                    source_label=getattr(c, "source_label", ""),
+                    retrieved_at=getattr(c, "retrieved_at", datetime.utcnow()),
+                    snippet=getattr(c, "snippet", None),
+                ))
+
         await db.commit()
         await db.refresh(asst_msg)
 

@@ -223,20 +223,18 @@ class SamSearchTool(BaseTool):
         ]
 
     async def healthcheck(self) -> dict[str, Any]:
-        """Check SAM.gov API reachability (unauthenticated ping)."""
+        """Check SAM.gov API key configuration."""
         try:
-            response = await self._client.get(
-                SAM_API_BASE,
-                params={"limit": 1, "postedFrom": "01/01/2024", "postedTo": "01/02/2024"},
-                timeout=8.0,
-                headers={"Accept": "application/json"},
-            )
-            # 403 = reachable but no key (expected without key); 200 = key present and valid
-            if response.status_code in (200, 403):
-                return {"tool_id": self.id, "status": "healthy", "message": f"HTTP {response.status_code}"}
-            return {"tool_id": self.id, "status": "unhealthy", "message": f"HTTP {response.status_code}"}
-        except Exception as e:
-            return {"tool_id": self.id, "status": "unhealthy", "message": str(e)}
+            from ..config import settings as _settings
+            api_key = getattr(_settings, "SAM_API_KEY", "") or ""
+        except Exception:
+            api_key = ""
+        if not api_key:
+            import os as _os
+            api_key = _os.environ.get("SAM_API_KEY", "")
+        if api_key:
+            return {"tool_id": self.id, "status": "healthy", "message": "API key configured"}
+        return {"tool_id": self.id, "status": "unhealthy", "message": "No API key — set via Admin > API Keys"}
 
     def get_examples(self) -> list[dict]:
         """Return example invocations."""

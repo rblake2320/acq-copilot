@@ -110,12 +110,19 @@ FAR_CLAUSE_TITLES = {
 }
 
 
+IMAGE_EXTENSIONS = {"png", "jpg", "jpeg", "tiff", "tif", "bmp", "gif", "webp"}
+NIM_OCR_URL = "http://localhost:8000/v1/infer"
+
+
 class DocumentParseTool(BaseTool):
-    """Parse PDF/DOCX solicitation documents to extract text and FAR clauses."""
+    """Parse PDF/DOCX/image solicitation documents to extract text and FAR clauses."""
 
     id = "document.parse"
     name = "Document Parser"
-    description = "Extract text and FAR/DFARS clauses from uploaded solicitation documents (PDF, DOCX)."
+    description = (
+        "Extract text and FAR/DFARS clauses from uploaded solicitation documents. "
+        "Supports PDF, DOCX, TXT, and images (PNG, JPG, TIFF, BMP, GIF) via OCR."
+    )
     input_schema = {
         "type": "object",
         "properties": {
@@ -190,6 +197,10 @@ class DocumentParseTool(BaseTool):
             return self._parse_pdf(file_bytes)
         elif ext in ("docx", "doc"):
             return self._parse_docx(file_bytes)
+        elif ext in IMAGE_EXTENSIONS:
+            return await self._parse_image_ocr(file_bytes, content_b64, filename)
+        elif ext == "rtf":
+            return self._parse_rtf(file_bytes)
         else:
             # Treat as plain text
             try:
@@ -234,6 +245,82 @@ class DocumentParseTool(BaseTool):
             text = file_bytes.decode("utf-8", errors="replace")
             return text, 1, "raw"
 
+    async def _parse_image_ocr(self, file_bytes: bytes, content_b64: str, filename: str):
+        """Parse image file using NVIDIA NIM PaddleOCR service."""
+        import base64
+
+        # Determine MIME type
+        ext = filename.lower().rsplit(".", 1)[-1] if "." in filename else "png"
+        mime_map = {
+            "jpg": "image/jpeg", "jpeg": "image/jpeg",
+            "png": "image/png", "tiff": "image/tiff",
+            "tif": "image/tiff", "bmp": "image/bmp",
+            "gif": "image/gif", "webp": "image/webp",
+        }
+        mime = mime_map.get(ext, "image/png")
+        data_url = f"data:{mime};base64,{content_b64}"
+
+        try:
+            payload = {
+                "inputs": [
+                    {
+                        "name": "image",
+                        "shape": [1, 1],
+                        "datatype": "BYTES",
+                        "data": [[data_url]],
+                    }
+                ]
+            }
+            response = await self._client.post(
+                NIM_OCR_URL,
+                json=payload,
+                timeout=30.0,
+                headers={"Accept": "application/json"},
+            )
+            response.raise_for_status()
+            result = response.json()
+
+            # Extract text from NIM response
+            outputs = result.get("outputs", [])
+            texts = []
+            for output in outputs:
+                data = output.get("data", [])
+                for item in data:
+                    if isinstance(item, list):
+                        for entry in item:
+                            if isinstance(entry, str):
+                                texts.append(entry)
+                    elif isinstance(item, str):
+                        texts.append(item)
+
+            text = "\n".join(texts) if texts else ""
+            logger.info("nim_ocr_success", filename=filename, chars=len(text))
+            return text, 1, "nim-paddleocr"
+
+        except Exception as e:
+            logger.warning("nim_ocr_failed", filename=filename, error=str(e))
+            # Fall back: return a placeholder so parse doesn't fail
+            return (
+                f"[Image file: {filename} — OCR service unavailable. "
+                "Start NVIDIA NIM PaddleOCR container on port 8000 to enable image text extraction.]",
+                1,
+                "image-fallback",
+            )
+
+    def _parse_rtf(self, file_bytes: bytes):
+        """Strip RTF markup and return plain text."""
+        try:
+            # Simple RTF stripper: remove control words and groups
+            text = file_bytes.decode("utf-8", errors="replace")
+            import re as _re
+            text = _re.sub(r'\{[^{}]*\}', '', text)
+            text = _re.sub(r'\\[a-z]+\d*\s?', '', text)
+            text = _re.sub(r'[{}\\]', '', text)
+            return text.strip(), 1, "rtf"
+        except Exception:
+            text = file_bytes.decode("utf-8", errors="replace")
+            return text, 1, "rtf-raw"
+
     def _extract_clauses(self, text: str) -> list[ExtractedClause]:
         """Extract FAR/DFARS clause references from text."""
         clauses = []
@@ -273,7 +360,7 @@ class DocumentParseTool(BaseTool):
         return []
 
     async def healthcheck(self) -> dict:
-        return {"tool_id": self.id, "status": "ok", "name": self.name}
+        return {"tool_id": self.id, "status": "healthy", "message": f"{self.name} is operational"}
 
     async def close(self) -> None:
         pass

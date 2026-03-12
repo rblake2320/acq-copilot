@@ -243,7 +243,7 @@ class FARRagTool(BaseTool):
         ]
 
     async def healthcheck(self) -> dict:
-        return {"tool_id": self.id, "status": "ok", "name": self.name}
+        return {"tool_id": self.id, "status": "healthy", "message": f"{self.name} is operational"}
 
     async def close(self) -> None:
         pass

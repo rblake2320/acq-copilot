@@ -16,6 +16,12 @@ from app.tools.gsa_calc import GSACalcTool
 from app.tools.regulations_gov import RegulationsGovTool
 from app.tools.igce_builder import IGCEBuilderTool
 from app.tools.sam_opportunities import SamSearchTool
+from app.tools.compliance_checker import ComplianceCheckerTool
+from app.tools.document_parse import DocumentParseTool
+from app.tools.far_rag import FARRagTool
+from app.tools.price_reasonableness import PriceReasonablenessTool
+from app.tools.threshold_checker import ThresholdCheckerTool
+from app.tools.vehicle_recommender import VehicleRecommenderTool
 
 
 # Tool registry mapping
@@ -29,6 +35,12 @@ TOOL_REGISTRY: Dict[str, Type[BaseTool]] = {
     "regulations.search_dockets": RegulationsGovTool,
     "igce.build": IGCEBuilderTool,
     "sam.search_opportunities": SamSearchTool,
+    "compliance.check_solicitation": ComplianceCheckerTool,
+    "document.parse": DocumentParseTool,
+    "far.semantic_search": FARRagTool,
+    "price.reasonableness": PriceReasonablenessTool,
+    "threshold.check": ThresholdCheckerTool,
+    "vehicle.recommend": VehicleRecommenderTool,
 }
 
 
@@ -102,6 +114,12 @@ __all__ = [
     "RegulationsGovTool",
     "IGCEBuilderTool",
     "SamSearchTool",
+    "ComplianceCheckerTool",
+    "DocumentParseTool",
+    "FARRagTool",
+    "PriceReasonablenessTool",
+    "ThresholdCheckerTool",
+    "VehicleRecommenderTool",
     "TOOL_REGISTRY",
     "register_all_tools",
     "get_tool_by_id",

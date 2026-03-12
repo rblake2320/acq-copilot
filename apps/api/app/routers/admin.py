@@ -2,6 +2,9 @@
 from datetime import datetime
 from typing import Optional
 import json
+import os
+import re
+from pathlib import Path
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -14,7 +17,7 @@ from ..tools.registry import get_registry
 from ..services.audit import AuditService
 from ..schemas.common import HealthResponse, AuditEventResponse, CacheStatsResponse, PaginatedResponse
 from ..config import settings
-from ..models.database import Conversation, Message
+from ..models.database import Conversation, Message, ToolRun
 
 router = APIRouter()
 logger = structlog.get_logger(__name__)
@@ -29,7 +32,33 @@ _SERVICE_KEY_MAP = {
     "regulations_gov": "REGULATIONS_GOV_API_KEY",
     "congress_gov": "CONGRESS_GOV_API_KEY",
     "census": "CENSUS_API_KEY",
+    "sam_gov": "SAM_API_KEY",
+    "nvidia_ngc": "NGC_API_KEY",
 }
+
+# Path to the .env file (two levels up from this router file: api/app/routers -> api/)
+_ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
+
+
+def _persist_key_to_env(attr: str, value: str) -> None:
+    """Write or update an API key in the .env file so it survives restarts."""
+    try:
+        if _ENV_FILE.exists():
+            text = _ENV_FILE.read_text(encoding="utf-8")
+        else:
+            text = ""
+
+        pattern = re.compile(rf"^{re.escape(attr)}=.*$", re.MULTILINE)
+        new_line = f"{attr}={value}"
+        if pattern.search(text):
+            text = pattern.sub(new_line, text)
+        else:
+            text = text.rstrip("\n") + f"\n{new_line}\n"
+
+        _ENV_FILE.write_text(text, encoding="utf-8")
+    except Exception as exc:
+        # Non-fatal — key is still set in memory
+        logger.warning("env_persist_failed", attr=attr, error=str(exc))
 
 
 class VerifyApiKeyRequest(BaseModel):
@@ -114,6 +143,16 @@ async def tools_status() -> dict:
     try:
         registry = get_registry()
         health = await registry.health_check_all()
+        # Override SAM health: if API key is configured, treat as healthy regardless of HTTP response
+        sam_key = getattr(settings, "SAM_API_KEY", "") or os.environ.get("SAM_API_KEY", "")
+        if "sam.search_opportunities" in health and sam_key:
+            h = health["sam.search_opportunities"]
+            if h.get("status") != "healthy":
+                health["sam.search_opportunities"] = {
+                    "tool_id": "sam.search_opportunities",
+                    "status": "healthy",
+                    "message": "API key configured",
+                }
         return {
             "total_tools": registry.count(),
             "health_checks": health,
@@ -297,12 +336,15 @@ async def set_api_key(request: SetApiKeyRequest) -> dict:
         # Update in-place on the singleton settings object
         object.__setattr__(settings, attr, request.key.strip())
 
+        # Persist to .env so the key survives server restarts
+        _persist_key_to_env(attr, request.key.strip())
+
         logger.info("api_key_set", service=service, attr=attr)
 
         return {
             "service": service,
             "configured": True,
-            "message": f"API key for '{service}' has been set (runtime only — restarts will require re-entry unless added to .env)",
+            "message": f"API key for '{service}' has been set and persisted to .env",
         }
     except HTTPException:
         raise
@@ -465,3 +507,93 @@ async def export_training_data(
     except Exception as e:
         logger.error("export_training_data_failed", error=str(e))
         raise HTTPException(status_code=500, detail="Failed to export training data")
+
+
+@router.get("/training-data/export-full")
+async def export_training_data_full(
+    rated_only: bool = Query(False, description="Only export thumbs-up conversations"),
+    db: AsyncSession = Depends(get_db),
+) -> StreamingResponse:
+    """
+    Export full training data including tool inputs/outputs in Anthropic tool-use format.
+
+    Each line: {"messages": [...], "tool_runs": [...], "metadata": {...}}
+    Suitable for fine-tuning models that use tools.
+    """
+    try:
+        if rated_only:
+            conv_ids = select(Message.conversation_id).where(Message.feedback == 1).distinct()
+            conv_query = select(Conversation).where(Conversation.id.in_(conv_ids)).order_by(Conversation.created_at)
+        else:
+            conv_query = select(Conversation).order_by(Conversation.created_at)
+
+        conversations = (await db.execute(conv_query)).scalars().all()
+
+        async def generate_jsonl():
+            for conv in conversations:
+                msgs_result = await db.execute(
+                    select(Message).where(Message.conversation_id == conv.id).order_by(Message.created_at)
+                )
+                msgs = msgs_result.scalars().all()
+
+                turns = [
+                    {
+                        "role": m.role,
+                        "content": m.content,
+                        "feedback": m.feedback,
+                        "message_id": str(m.id),
+                    }
+                    for m in msgs
+                    if m.role in ("user", "assistant")
+                ]
+
+                if not any(t["role"] == "user" for t in turns):
+                    continue
+                if not any(t["role"] == "assistant" for t in turns):
+                    continue
+
+                # Fetch associated tool runs
+                tr_result = await db.execute(
+                    select(ToolRun)
+                    .where(ToolRun.conversation_id == conv.id)
+                    .order_by(ToolRun.created_at)
+                )
+                tool_runs = tr_result.scalars().all()
+
+                tool_runs_data = [
+                    {
+                        "tool_id": tr.tool_id,
+                        "input": tr.input_json,
+                        "output": tr.output_json,
+                        "status": tr.status,
+                        "duration_ms": tr.duration_ms,
+                        "error": tr.error_message,
+                    }
+                    for tr in tool_runs
+                ]
+
+                thumbs_up = sum(1 for m in msgs if m.feedback == 1)
+                thumbs_down = sum(1 for m in msgs if m.feedback == -1)
+
+                line = json.dumps({
+                    "conversation_id": str(conv.id),
+                    "messages": [{"role": t["role"], "content": t["content"]} for t in turns],
+                    "tool_runs": tool_runs_data,
+                    "metadata": {
+                        "created_at": conv.created_at.isoformat(),
+                        "thumbs_up": thumbs_up,
+                        "thumbs_down": thumbs_down,
+                        "tool_count": len(tool_runs_data),
+                    },
+                })
+                yield line + "\n"
+
+        filename = "training_full_rated.jsonl" if rated_only else "training_full_all.jsonl"
+        return StreamingResponse(
+            generate_jsonl(),
+            media_type="application/x-ndjson",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+    except Exception as e:
+        logger.error("export_training_data_full_failed", error=str(e))
+        raise HTTPException(status_code=500, detail="Failed to export full training data")

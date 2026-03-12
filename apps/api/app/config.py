@@ -63,6 +63,7 @@ class Settings(BaseSettings):
     )
     CONGRESS_GOV_API_KEY: Optional[str] = Field(default=None, description="Congress.gov API key")
     CENSUS_API_KEY: Optional[str] = Field(default=None, description="US Census Bureau API key")
+    NGC_API_KEY: Optional[str] = Field(default=None, description="NVIDIA NGC API key for NIM services")
     REGULATIONS_GOV_BASE_URL: str = Field(
         default="https://api.regulations.gov/v4",
         description="Regulations.gov API base URL",

@@ -175,13 +175,13 @@ export default function CompliancePage() {
           >
             <input
               type="file"
-              accept=".pdf,.docx,.doc,.txt"
+              accept=".pdf,.docx,.doc,.txt,.rtf,.png,.jpg,.jpeg,.tiff,.tif,.bmp,.gif,.webp"
               onChange={onFileInput}
               className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
             />
             <Upload className="w-10 h-10 text-slate-500 mx-auto mb-3" />
             <p className="text-slate-300 font-medium">Drop solicitation file here or click to browse</p>
-            <p className="text-slate-500 text-sm mt-1">PDF, DOCX, or TXT — max 10MB</p>
+            <p className="text-slate-500 text-sm mt-1">PDF, DOCX, TXT, RTF, or images (PNG, JPG, TIFF) — max 10MB</p>
           </div>
 
           <div className="text-center text-slate-500 text-sm">— or —</div>
