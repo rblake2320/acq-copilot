@@ -2,7 +2,7 @@
 
 import React from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import {
   MessageSquare,
   Calculator,
@@ -15,14 +15,24 @@ import {
   Shield,
   Zap,
   DollarSign,
+  LogIn,
+  LogOut,
+  User,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useStore } from "@/lib/store";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 
 export function Sidebar() {
   const pathname = usePathname();
-  const { sidebarOpen, toggleSidebar } = useStore();
+  const router = useRouter();
+  const { sidebarOpen, toggleSidebar, user, logout } = useStore();
+
+  const handleLogout = () => {
+    logout();
+    router.push("/login");
+  };
 
   const navigation = [
     {
@@ -156,11 +166,84 @@ export function Sidebar() {
           })}
         </nav>
 
-        {/* Footer */}
+        {/* Footer — user info / auth */}
         <div className="border-t border-border p-3 dark:border-border">
-          <div className="text-xs text-muted-foreground dark:text-muted-foreground">
-            {sidebarOpen && <p>v0.1.0 Beta</p>}
-          </div>
+          {user ? (
+            /* Logged-in state */
+            sidebarOpen ? (
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex min-w-0 items-center gap-2">
+                  <div className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
+                    <User className="h-4 w-4" />
+                  </div>
+                  <div className="min-w-0">
+                    <p className="truncate text-xs font-medium text-foreground">
+                      {user.username}
+                    </p>
+                    <Badge variant="secondary" className="mt-0.5 px-1 py-0 text-[10px]">
+                      {user.role}
+                    </Badge>
+                  </div>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={handleLogout}
+                  title="Sign out"
+                  className="flex-shrink-0 text-muted-foreground hover:text-foreground"
+                >
+                  <LogOut className="h-4 w-4" />
+                </Button>
+              </div>
+            ) : (
+              /* Collapsed — just icon + logout on hover */
+              <div className="group relative flex justify-center">
+                <div className="flex h-7 w-7 items-center justify-center rounded-full bg-primary/10 text-primary">
+                  <User className="h-4 w-4" />
+                </div>
+                <button
+                  onClick={handleLogout}
+                  title={`Sign out (${user.username})`}
+                  className="absolute inset-0 flex items-center justify-center rounded-full opacity-0 transition-opacity group-hover:bg-destructive/10 group-hover:opacity-100"
+                >
+                  <LogOut className="h-3.5 w-3.5 text-destructive" />
+                </button>
+              </div>
+            )
+          ) : (
+            /* Guest state */
+            sidebarOpen ? (
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs text-muted-foreground">Guest</span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => router.push("/login")}
+                  className="h-7 gap-1 px-2 text-xs"
+                >
+                  <LogIn className="h-3.5 w-3.5" />
+                  Login
+                </Button>
+              </div>
+            ) : (
+              <div className="flex justify-center">
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  onClick={() => router.push("/login")}
+                  title="Login"
+                  className="text-muted-foreground hover:text-foreground"
+                >
+                  <LogIn className="h-4 w-4" />
+                </Button>
+              </div>
+            )
+          )}
+          {sidebarOpen && (
+            <p className="mt-2 text-[10px] text-muted-foreground/60">
+              v0.1.0 Beta
+            </p>
+          )}
         </div>
       </div>
     </aside>

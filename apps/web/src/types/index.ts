@@ -207,3 +207,14 @@ export interface APIKeyStatus {
   lastVerified: Date;
   status: "valid" | "expired" | "invalid" | "unconfigured";
 }
+
+export interface AuthResponse {
+  access_token: string;
+  token_type: string;
+}
+
+export interface UserInfo {
+  username: string;
+  email: string;
+  role: string;
+}

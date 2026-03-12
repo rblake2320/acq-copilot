@@ -9,19 +9,33 @@ import {
   RegulatoryResult,
   APIKeyStatus,
   CacheStats,
+  AuthResponse,
+  UserInfo,
 } from "@/types";
 
 const API_BASE = "/api";
+
+/** Read the stored JWT token without importing the full store (avoids circular deps). */
+function getStoredToken(): string | null {
+  if (typeof window === "undefined") return null;
+  return localStorage.getItem("acq_token");
+}
 
 class APIClient {
   private async request<T>(
     endpoint: string,
     options?: RequestInit
   ): Promise<T> {
+    const token = getStoredToken();
+    const authHeader: Record<string, string> = token
+      ? { Authorization: `Bearer ${token}` }
+      : {};
+
     const response = await fetch(`${API_BASE}${endpoint}`, {
       ...options,
       headers: {
         "Content-Type": "application/json",
+        ...authHeader,
         ...options?.headers,
       },
     });
@@ -29,12 +43,60 @@ class APIClient {
     if (!response.ok) {
       const error = await response.json().catch(() => ({}));
       throw new Error(
-        error.message || `API request failed: ${response.statusText}`
+        error.detail || error.message || `API request failed: ${response.statusText}`
       );
     }
 
     return response.json();
   }
+
+  auth = {
+    login: async (username: string, password: string): Promise<AuthResponse> => {
+      // OAuth2 password flow requires form-encoded body
+      const form = new URLSearchParams();
+      form.append("username", username);
+      form.append("password", password);
+
+      const response = await fetch(`${API_BASE}/auth/token`, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: form.toString(),
+      });
+
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        throw new Error(error.detail || "Login failed");
+      }
+
+      return response.json() as Promise<AuthResponse>;
+    },
+
+    register: async (
+      username: string,
+      email: string,
+      password: string
+    ): Promise<UserInfo> => {
+      return this.request<UserInfo>("/auth/register", {
+        method: "POST",
+        body: JSON.stringify({ username, email, password }),
+      });
+    },
+
+    me: async (token: string): Promise<UserInfo> => {
+      const response = await fetch(`${API_BASE}/auth/me`, {
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error("Failed to fetch user info");
+      }
+
+      return response.json() as Promise<UserInfo>;
+    },
+  };
 
   chat = {
     send: async (
