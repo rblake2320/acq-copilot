@@ -16,6 +16,11 @@ from .tools import register_all_tools
 from .services.cache import CacheService
 from .routers import chat, tools, igce, regulatory, admin
 from .routers import market_research
+from .routers.rag import router as rag_router
+from .routers.opportunities import router as opportunities_router
+from .routers.compliance import router as compliance_router
+from .routers.planning import router as planning_router
+from .routers.pricing import router as pricing_router
 from .models.database import Base
 
 # Configure structured logging
@@ -169,6 +174,12 @@ def create_app() -> FastAPI:
     app.include_router(regulatory.router, prefix="/api/regulatory", tags=["regulatory"])
     app.include_router(market_research.router, prefix="/api/market-research", tags=["market-research"])
     app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
+    app.include_router(rag_router, prefix="/api/rag", tags=["rag"])
+    app.include_router(opportunities_router, prefix="/api/opportunities", tags=["opportunities"])
+    app.include_router(compliance_router, prefix="/api/compliance", tags=["compliance"])
+    app.include_router(planning_router, prefix="/api/planning", tags=["planning"])
+    app.include_router(pricing_router, prefix="/api/pricing", tags=["pricing"])
+    # auth router paused — re-enable when ready for Phase 7
 
     # Root endpoint
     @app.get("/")

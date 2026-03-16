@@ -9,19 +9,33 @@ import {
   RegulatoryResult,
   APIKeyStatus,
   CacheStats,
+  AuthResponse,
+  UserInfo,
 } from "@/types";
 
 const API_BASE = "/api";
+
+/** Read the stored JWT token without importing the full store (avoids circular deps). */
+function getStoredToken(): string | null {
+  if (typeof window === "undefined") return null;
+  return localStorage.getItem("acq_token");
+}
 
 class APIClient {
   private async request<T>(
     endpoint: string,
     options?: RequestInit
   ): Promise<T> {
+    const token = getStoredToken();
+    const authHeader: Record<string, string> = token
+      ? { Authorization: `Bearer ${token}` }
+      : {};
+
     const response = await fetch(`${API_BASE}${endpoint}`, {
       ...options,
       headers: {
         "Content-Type": "application/json",
+        ...authHeader,
         ...options?.headers,
       },
     });
@@ -29,12 +43,60 @@ class APIClient {
     if (!response.ok) {
       const error = await response.json().catch(() => ({}));
       throw new Error(
-        error.message || `API request failed: ${response.statusText}`
+        error.detail || error.message || `API request failed: ${response.statusText}`
       );
     }
 
     return response.json();
   }
+
+  auth = {
+    login: async (username: string, password: string): Promise<AuthResponse> => {
+      // OAuth2 password flow requires form-encoded body
+      const form = new URLSearchParams();
+      form.append("username", username);
+      form.append("password", password);
+
+      const response = await fetch(`${API_BASE}/auth/token`, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: form.toString(),
+      });
+
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        throw new Error(error.detail || "Login failed");
+      }
+
+      return response.json() as Promise<AuthResponse>;
+    },
+
+    register: async (
+      username: string,
+      email: string,
+      password: string
+    ): Promise<UserInfo> => {
+      return this.request<UserInfo>("/auth/register", {
+        method: "POST",
+        body: JSON.stringify({ username, email, password }),
+      });
+    },
+
+    me: async (token: string): Promise<UserInfo> => {
+      const response = await fetch(`${API_BASE}/auth/me`, {
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error("Failed to fetch user info");
+      }
+
+      return response.json() as Promise<UserInfo>;
+    },
+  };
 
   chat = {
     send: async (
@@ -127,31 +189,104 @@ class APIClient {
 
   regulatory = {
     search: async (query: string): Promise<RegulatoryResult[]> => {
-      return this.request<RegulatoryResult[]>("/regulatory/search", {
+      const raw = await this.request<Record<string, unknown>>("/regulatory/search", {
         method: "POST",
         body: JSON.stringify({ query }),
       });
+      // API returns { query, federal_register: {documents:[...]}, ecfr: {...}, regulations_gov: {...} }
+      // Normalize into a flat array for the UI
+      if (Array.isArray(raw)) return raw as RegulatoryResult[];
+      const results: RegulatoryResult[] = [];
+      const fr = (raw?.federal_register as Record<string, unknown>)?.documents;
+      if (Array.isArray(fr)) {
+        fr.forEach((d: Record<string, unknown>) => results.push({
+          title: String(d.title || ""),
+          summary: String(d.abstract || d.summary || ""),
+          url: String(d.html_url || d.url || ""),
+          source: "FR",
+          regulation: String(d.document_number || ""),
+          effectiveDate: String(d.publication_date || d.effective_on || new Date().toISOString()),
+        }));
+      }
+      const ecfr = raw?.ecfr as Record<string, unknown>;
+      if (ecfr && !ecfr.error) {
+        const sections = Array.isArray(ecfr.sections) ? ecfr.sections as Record<string, unknown>[] : (ecfr.title ? [ecfr] : []);
+        sections.forEach((s) => results.push({
+          title: String(s.label || s.title || "eCFR Section"),
+          summary: String(s.subject_text || s.text || ""),
+          url: `https://www.ecfr.gov/`,
+          source: "eCFR",
+          regulation: String(s.identifier || ""),
+          effectiveDate: new Date().toISOString(),
+        }));
+      }
+      const rg = (raw?.regulations_gov as Record<string, unknown>)?.data;
+      if (Array.isArray(rg)) {
+        rg.forEach((d: Record<string, unknown>) => {
+          const attrs = (d.attributes as Record<string, unknown>) || {};
+          results.push({
+            title: String(attrs.title || ""),
+            summary: String(attrs.summary || ""),
+            url: `https://www.regulations.gov/document/${d.id}`,
+            source: "Regulations.gov",
+            regulation: String(d.id || ""),
+            effectiveDate: String(attrs.modifyDate || new Date().toISOString()),
+          });
+        });
+      }
+      return results;
     },
 
     getFederalRegister: async (query: string): Promise<RegulatoryResult[]> => {
-      return this.request<RegulatoryResult[]>("/regulatory/federal-register", {
-        method: "POST",
-        body: JSON.stringify({ query }),
-      });
+      const raw = await this.request<Record<string, unknown>>("/regulatory/federal-register", {
+        params: { query } as unknown,
+      } as RequestInit);
+      if (Array.isArray(raw)) return raw as RegulatoryResult[];
+      const docs = (raw?.documents as Record<string, unknown>[]) || [];
+      return docs.map((d) => ({
+        title: String(d.title || ""),
+        summary: String(d.abstract || ""),
+        url: String(d.html_url || ""),
+        source: "FR",
+        regulation: String(d.document_number || ""),
+        effectiveDate: String(d.publication_date || new Date().toISOString()),
+      }));
     },
 
     getECFR: async (titleNumber: number): Promise<RegulatoryResult[]> => {
-      return this.request<RegulatoryResult[]>(
+      const raw = await this.request<Record<string, unknown>>(
         `/regulatory/ecfr/${titleNumber}`
       );
+      if (Array.isArray(raw)) return raw as RegulatoryResult[];
+      return raw ? [{
+        title: String((raw as Record<string, unknown>).label || `eCFR Title ${titleNumber}`),
+        summary: String((raw as Record<string, unknown>).subject_text || ""),
+        url: `https://www.ecfr.gov/title-${titleNumber}`,
+        source: "eCFR",
+        regulation: `Title ${titleNumber}`,
+        effectiveDate: new Date().toISOString(),
+      }] : [];
     },
 
     getRegulationsGov: async (
       documentType: string
     ): Promise<RegulatoryResult[]> => {
-      return this.request<RegulatoryResult[]>(
+      const raw = await this.request<Record<string, unknown>>(
         `/regulatory/regulations-gov?type=${documentType}`
       );
+      if (Array.isArray(raw)) return raw as RegulatoryResult[];
+      const data = (raw?.data as Record<string, unknown>[]) || [];
+      return data.map((d) => {
+        const attrs = (d.attributes as Record<string, unknown>) || {};
+        return {
+          title: String(attrs.title || ""),
+          summary: String(attrs.summary || ""),
+          url: `https://www.regulations.gov/document/${d.id}`,
+          source: "Regulations.gov",
+          regulation: String(d.id || ""),
+          effectiveDate: String(attrs.modifyDate || new Date().toISOString()),
+        };
+      });
     },
   };
 
@@ -164,10 +299,29 @@ class APIClient {
         agency?: string;
       }
     ): Promise<AwardResult[]> => {
-      return this.request<AwardResult[]>("/market-research/usa-spending", {
+      const raw = await this.request<Record<string, unknown>>("/market-research/usa-spending", {
         method: "POST",
         body: JSON.stringify({ query, filters }),
       });
+      // API returns { status, output: { awards: [...], total_count, page, limit }, duration_ms, citations }
+      if (Array.isArray(raw)) return raw as AwardResult[];
+      const output = raw?.output as Record<string, unknown>;
+      const awards = output?.awards;
+      if (Array.isArray(awards)) {
+        return (awards as Record<string, unknown>[]).map((a) => ({
+          awardId: String(a.award_id || a.piid || ""),
+          vendorName: String(a.recipient_name || ""),
+          awardAmount: Number(a.award_amount || 0),
+          competitiveRange: true,
+          awardDate: String(a.period_start || ""),
+          contractType: String(a.award_type || "Contract"),
+          naicsCode: String(a.naics_code || ""),
+          description: String(a.description || ""),
+          agencyName: String(a.agency_name || ""),
+          url: String(a.usaspending_url || ""),
+        } as AwardResult));
+      }
+      return [];
     },
 
     getAwardTrends: async (naicsCode: string): Promise<unknown> => {

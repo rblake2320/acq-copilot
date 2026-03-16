@@ -20,10 +20,9 @@ import {
   Zap,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { formatDistanceToNow } from "date-fns";
 
 interface ToolTracePanelProps {
-  toolRuns: ToolRun[];
+  toolRuns?: ToolRun[] | null;
 }
 
 export function ToolTracePanel({ toolRuns }: ToolTracePanelProps) {
@@ -35,10 +34,12 @@ export function ToolTracePanel({ toolRuns }: ToolTracePanelProps) {
         return <CheckCircle className="h-4 w-4 text-green-500" />;
       case "error":
         return <AlertCircle className="h-4 w-4 text-red-500" />;
+      case "timeout":
+        return <Clock className="h-4 w-4 text-yellow-500" />;
       case "running":
         return <Clock className="h-4 w-4 animate-spin text-blue-500" />;
       case "pending":
-        return <Clock className="h-4 w-4 text-yellow-500" />;
+        return <Clock className="h-4 w-4 text-slate-400" />;
     }
   };
 
@@ -48,18 +49,22 @@ export function ToolTracePanel({ toolRuns }: ToolTracePanelProps) {
         return "bg-green-500/10 text-green-700 dark:text-green-400";
       case "error":
         return "bg-red-500/10 text-red-700 dark:text-red-400";
+      case "timeout":
+        return "bg-yellow-500/10 text-yellow-700 dark:text-yellow-400";
       case "running":
         return "bg-blue-500/10 text-blue-700 dark:text-blue-400";
       case "pending":
-        return "bg-yellow-500/10 text-yellow-700 dark:text-yellow-400";
+        return "bg-slate-500/10 text-slate-600 dark:text-slate-400";
     }
   };
 
-  if (toolRuns.length === 0) {
+  const runs = toolRuns ?? [];
+
+  if (runs.length === 0) {
     return (
       <Card className="mx-6 mb-6 border-dashed dark:bg-card/50">
         <CardContent className="py-6 text-center text-sm text-muted-foreground dark:text-muted-foreground">
-          No tool runs yet
+          Waiting for tool execution…
         </CardContent>
       </Card>
     );
@@ -73,7 +78,7 @@ export function ToolTracePanel({ toolRuns }: ToolTracePanelProps) {
             <Zap className="h-5 w-5 text-primary dark:text-primary" />
             <CardTitle className="dark:text-foreground">Tool Trace</CardTitle>
             <Badge variant="secondary" className="ml-2">
-              {toolRuns.length}
+              {runs.length}
             </Badge>
           </div>
           <CardDescription className="dark:text-muted-foreground">
@@ -83,7 +88,7 @@ export function ToolTracePanel({ toolRuns }: ToolTracePanelProps) {
       </CardHeader>
       <CardContent>
         <div className="space-y-2">
-          {toolRuns.map((run) => (
+          {runs.map((run) => (
             <div
               key={run.id}
               className="rounded-lg border border-border bg-background dark:border-border dark:bg-background/50"
@@ -98,7 +103,7 @@ export function ToolTracePanel({ toolRuns }: ToolTracePanelProps) {
                 <div className="flex-1">
                   <div className="flex items-center gap-2">
                     <span className="font-medium text-sm text-foreground dark:text-foreground">
-                      {run.toolName}
+                      {run.name ?? run.toolName}
                     </span>
                     <Badge
                       variant="secondary"
@@ -111,9 +116,9 @@ export function ToolTracePanel({ toolRuns }: ToolTracePanelProps) {
                     </Badge>
                   </div>
                   <p className="text-xs text-muted-foreground dark:text-muted-foreground">
-                    {formatDistanceToNow(new Date(run.startedAt), {
-                      addSuffix: true,
-                    })} • {run.executionTime}ms
+                    {(run.duration_ms ?? run.executionTime) != null
+                      ? `${run.duration_ms ?? run.executionTime}ms`
+                      : "—"}
                   </p>
                 </div>
                 {expandedRun === run.id ? <ChevronUp /> : <ChevronDown />}
@@ -130,7 +135,7 @@ export function ToolTracePanel({ toolRuns }: ToolTracePanelProps) {
                     </pre>
                   </div>
 
-                  {run.output && (
+                  {!!run.output && (
                     <div>
                       <h4 className="mb-2 text-xs font-semibold text-foreground dark:text-foreground">
                         Output
