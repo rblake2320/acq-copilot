@@ -115,23 +115,18 @@ async def chat_send(
             for m in history
             if m.role in ("user", "assistant")
         ]
+        # Remove the last message (that's the current user message we just added)
+        if anthropic_messages and anthropic_messages[-1]["role"] == "user":
+            anthropic_messages = anthropic_messages[:-1]
 
-        # ── 4. Call Anthropic API ─────────────────────────────────────────────
-        if not settings.ANTHROPIC_API_KEY:
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="ANTHROPIC_API_KEY is not configured",
-            )
+        # ── 4. Run through orchestration pipeline ────────────────────────────
+        from ..orchestration.pipeline import run_pipeline, PipelineResult
 
-        async_client = anthropic.AsyncAnthropic(api_key=settings.ANTHROPIC_API_KEY)
-
-        response_msg = await async_client.messages.create(
-            model="claude-opus-4-5",
-            max_tokens=2048,
-            system=ACQUISITION_SYSTEM_PROMPT,
-            messages=anthropic_messages,
+        pipeline_result: PipelineResult = await run_pipeline(
+            query=request.message,
+            conversation_history=anthropic_messages,
         )
-        assistant_text = response_msg.content[0].text
+        assistant_text = pipeline_result.answer
 
         # ── 5. Store assistant message ─────────────────────────────────────────
         asst_msg = Message(
@@ -143,6 +138,32 @@ async def chat_send(
         db.add(asst_msg)
         await db.flush()
 
+        # ── 6. Persist tool runs + citations for training data capture ─────────
+        for tr in pipeline_result.tool_runs:
+            tool_run_row = ToolRun(
+                id=uuid.uuid4(),
+                conversation_id=conversation.id,
+                tool_id=tr.tool_id,
+                input_json=tr.input_params or {},
+                output_json=tr.output if isinstance(tr.output, dict) else {"result": str(tr.output)},
+                status=tr.status or "success",
+                duration_ms=tr.duration_ms or 0.0,
+                error_message=tr.error if hasattr(tr, "error") else None,
+            )
+            db.add(tool_run_row)
+            await db.flush()
+
+            for c in getattr(tr, "citations", []):
+                db.add(Citation(
+                    id=uuid.uuid4(),
+                    tool_run_id=tool_run_row.id,
+                    source_name=getattr(c, "source_name", ""),
+                    source_url=getattr(c, "source_url", ""),
+                    source_label=getattr(c, "source_label", ""),
+                    retrieved_at=getattr(c, "retrieved_at", datetime.utcnow()),
+                    snippet=getattr(c, "snippet", None),
+                ))
+
         await db.commit()
         await db.refresh(asst_msg)
 
@@ -152,8 +173,27 @@ async def chat_send(
             conversationId=str(conversation.id),
             messageId=str(asst_msg.id),
             content=assistant_text,
-            toolRuns=[],
-            citations=[],
+            toolRuns=[
+                {
+                    "id": f"{tr.tool_id}_{i}",
+                    "name": tr.name,
+                    "status": tr.status,
+                    "input": tr.input_params,
+                    "output": tr.output,
+                    "duration_ms": tr.duration_ms,
+                    "error": tr.error,
+                }
+                for i, tr in enumerate(pipeline_result.tool_runs)
+            ],
+            citations=[
+                {
+                    "url": c.source_url,
+                    "title": c.source_name,
+                    "snippet": c.snippet,
+                    "retrieved_at": c.retrieved_at,
+                }
+                for c in pipeline_result.citations
+            ],
         )
 
     except HTTPException:

@@ -49,17 +49,17 @@ export function ChatInterface() {
   }, [messages]);
 
   // Load conversation history
-  useQuery({
+  const { data: historyData } = useQuery({
     queryKey: ["chat-history", activeConversationId],
     queryFn: async () => {
       if (!activeConversationId) return [];
       return apiClient.chat.getHistory(activeConversationId);
     },
-    onSuccess: (data) => {
-      useStore.setState({ messages: data });
-    },
     enabled: !!activeConversationId,
   });
+  useEffect(() => {
+    if (historyData) useStore.setState({ messages: historyData });
+  }, [historyData]);
 
   const sendMutation = useMutation({
     mutationFn: async (content: string) => {
@@ -67,8 +67,23 @@ export function ChatInterface() {
       return apiClient.chat.send(activeConversationId, content);
     },
     onSuccess: (response) => {
-      setToolRuns(response.toolRuns);
-      response.toolRuns.forEach((run) => addToolRun(run));
+      // Store the assistant reply as a full Message so citations and toolRuns
+      // are available to CitationsList and ToolTracePanel from message state.
+      const assistantMessage = {
+        id: response.messageId,
+        conversationId: response.conversationId,
+        role: "assistant" as const,
+        content: response.content,
+        timestamp: new Date(),
+        toolRuns: response.toolRuns ?? [],
+        citations: response.citations ?? [],
+      };
+      addMessage(assistantMessage);
+
+      // Also sync the top-level toolRuns slice in the store for the panel.
+      const runs = response.toolRuns ?? [];
+      setToolRuns(runs);
+      runs.forEach((run) => addToolRun(run));
     },
     onError: (error) => {
       console.error("Chat error:", error);
@@ -163,15 +178,15 @@ export function ChatInterface() {
         )}
       </div>
 
-      {/* Citations */}
-      {messages.some((m) => m.citations && m.citations.length > 0) && (
-        <CitationsList
-          citations={
-            messages.find((m) => m.citations && m.citations.length > 0)
-              ?.citations || []
-          }
-        />
-      )}
+      {/* Citations — show citations from the most recent assistant message */}
+      {(() => {
+        const lastWithCitations = [...messages]
+          .reverse()
+          .find((m) => m.role === "assistant" && m.citations && m.citations.length > 0);
+        return lastWithCitations ? (
+          <CitationsList citations={lastWithCitations.citations} />
+        ) : null;
+      })()}
 
       {/* Input */}
       <div className="border-t border-border bg-card p-6 dark:border-border dark:bg-card">

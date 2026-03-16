@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { Message, Conversation, ToolRun } from "@/types";
+import { Message, Conversation, ToolRun, UserInfo } from "@/types";
 
 interface StoreState {
   conversations: Conversation[];
@@ -7,6 +7,10 @@ interface StoreState {
   messages: Message[];
   toolRuns: ToolRun[];
   sidebarOpen: boolean;
+
+  // Auth state
+  user: UserInfo | null;
+  token: string | null;
 
   setConversations: (conversations: Conversation[]) => void;
   addConversation: (conversation: Conversation) => void;
@@ -19,7 +23,15 @@ interface StoreState {
   toggleSidebar: () => void;
   setSidebarOpen: (open: boolean) => void;
   clearConversation: () => void;
+
+  // Auth actions
+  setUser: (user: UserInfo, token: string) => void;
+  logout: () => void;
 }
+
+// Hydrate token from localStorage on init (client-only)
+const storedToken =
+  typeof window !== "undefined" ? localStorage.getItem("acq_token") : null;
 
 export const useStore = create<StoreState>((set) => ({
   conversations: [],
@@ -27,6 +39,10 @@ export const useStore = create<StoreState>((set) => ({
   messages: [],
   toolRuns: [],
   sidebarOpen: true,
+
+  // Auth initial state
+  user: null,
+  token: storedToken,
 
   setConversations: (conversations) => set({ conversations }),
 
@@ -73,4 +89,18 @@ export const useStore = create<StoreState>((set) => ({
       messages: [],
       toolRuns: [],
     }),
+
+  setUser: (user, token) => {
+    if (typeof window !== "undefined") {
+      localStorage.setItem("acq_token", token);
+    }
+    set({ user, token });
+  },
+
+  logout: () => {
+    if (typeof window !== "undefined") {
+      localStorage.removeItem("acq_token");
+    }
+    set({ user: null, token: null });
+  },
 }));

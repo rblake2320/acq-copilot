@@ -88,7 +88,7 @@ export default function RegulatoryPage() {
 
       {/* Tabs */}
       {query.trim() && (
-        <Tabs defaultValue={activeTab} onChange={setActiveTab} className="space-y-4">
+        <Tabs defaultValue={activeTab} onValueChange={setActiveTab} className="space-y-4">
           <TabsList className="dark:bg-muted">
             <TabsTrigger value="all">All Results</TabsTrigger>
             <TabsTrigger value="fr">Federal Register</TabsTrigger>
@@ -147,7 +147,7 @@ export default function RegulatoryPage() {
                       {result.summary}
                     </p>
                     <div className="flex items-center gap-4 text-xs text-muted-foreground dark:text-muted-foreground">
-                      <span>Effective: {formatDate(new Date(result.effectiveDate))}</span>
+                      <span>Effective: {formatDate(result.effectiveDate)}</span>
                     </div>
                   </CardContent>
                 </Card>

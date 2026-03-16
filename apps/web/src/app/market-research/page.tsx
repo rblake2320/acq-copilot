@@ -182,7 +182,7 @@ export default function MarketResearchPage() {
                           Award Date
                         </h4>
                         <p className="text-foreground dark:text-foreground">
-                          {formatDate(new Date(result.awardDate))}
+                          {formatDate(result.awardDate)}
                         </p>
                       </div>
                     </div>

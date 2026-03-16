@@ -37,6 +37,8 @@ const KNOWN_SERVICES = [
   { id: "gsa_perdiem",     label: "GSA Per Diem",       description: "GSA travel per diem rates" },
   { id: "congress_gov",    label: "Congress.gov",       description: "Congressional data and legislation" },
   { id: "census",          label: "Census API",         description: "US Census Bureau data" },
+  { id: "sam_gov",         label: "SAM.gov",            description: "Contract opportunities and entity lookup" },
+  { id: "nvidia_ngc",      label: "NVIDIA NGC",          description: "NVIDIA NIM OCR and AI inference services" },
 ];
 
 export default function AdminPage() {

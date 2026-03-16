@@ -5,7 +5,7 @@ export interface Message {
   content: string;
   timestamp: Date;
   citations?: Citation[];
-  toolRuns?: string[];
+  toolRuns?: ToolRun[];
 }
 
 export interface Conversation {
@@ -18,25 +18,38 @@ export interface Conversation {
 
 export interface ToolRun {
   id: string;
-  conversationId: string;
-  messageId: string;
-  toolName: string;
-  status: "pending" | "running" | "success" | "error";
+  conversationId?: string;
+  messageId?: string;
+  /** Display name — matches API response field `name` */
+  name: string;
+  /** @deprecated Use `name`. Kept for store/legacy compatibility. */
+  toolName?: string;
+  status: "pending" | "running" | "success" | "error" | "timeout";
   input: Record<string, unknown>;
-  output: Record<string, unknown> | null;
-  error: string | null;
-  executionTime: number;
-  startedAt: Date;
-  completedAt: Date | null;
+  output: unknown;
+  error?: string | null;
+  /** Duration in milliseconds — matches API response field `duration_ms` */
+  duration_ms: number;
+  /** @deprecated Use `duration_ms`. Kept for store/legacy compatibility. */
+  executionTime?: number;
+  startedAt?: Date;
+  completedAt?: Date | null;
 }
 
 export interface Citation {
-  id: string;
-  source: string;
+  id?: string;
+  /** Display title — matches API response field `title` */
+  title: string;
+  /** @deprecated Use `title`. Kept for IGCE/legacy compatibility. */
+  source?: string;
   url: string;
-  timestamp: Date;
-  snippet: string;
-  relevance: number;
+  /** ISO string — matches API response field `retrieved_at` */
+  retrieved_at: string;
+  /** @deprecated Use `retrieved_at`. Kept for IGCE/legacy compatibility. */
+  timestamp?: Date;
+  snippet?: string;
+  /** @deprecated Not returned by the new API. */
+  relevance?: number;
 }
 
 export interface ChatResponse {
@@ -163,17 +176,20 @@ export interface AwardResult {
   vendorName: string;
   awardAmount: number;
   competitiveRange: boolean;
-  awardDate: Date;
+  awardDate: string;
   contractType: string;
   naicsCode: string;
+  description?: string;
+  agencyName?: string;
+  url?: string;
 }
 
 export interface RegulatoryResult {
-  citationId: string;
+  citationId?: string;
   title: string;
   regulation: string;
-  effectiveDate: Date;
-  source: "FR" | "eCFR" | "Regulations.gov";
+  effectiveDate: string;
+  source: "FR" | "eCFR" | "Regulations.gov" | string;
   url: string;
   summary: string;
 }
@@ -193,4 +209,15 @@ export interface APIKeyStatus {
   expiresAt: Date | null;
   lastVerified: Date;
   status: "valid" | "expired" | "invalid" | "unconfigured";
+}
+
+export interface AuthResponse {
+  access_token: string;
+  token_type: string;
+}
+
+export interface UserInfo {
+  username: string;
+  email: string;
+  role: string;
 }
