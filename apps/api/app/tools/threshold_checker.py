@@ -130,6 +130,8 @@ class ThresholdCheckerTool(BaseTool):
     id = "threshold.check"
     name = "FAR Threshold Checker"
     description = "Look up applicable FAR thresholds (MPT, SAT, TINA, CAS, etc.) for a contract value."
+    auth_requirements: list = []
+    rate_limit_profile: dict = {"requests_per_minute": 100}
     input_schema = {
         "type": "object",
         "properties": {

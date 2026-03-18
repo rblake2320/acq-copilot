@@ -123,6 +123,8 @@ class DocumentParseTool(BaseTool):
         "Extract text and FAR/DFARS clauses from uploaded solicitation documents. "
         "Supports PDF, DOCX, TXT, and images (PNG, JPG, TIFF, BMP, GIF) via OCR."
     )
+    auth_requirements: list = []
+    rate_limit_profile: dict = {"requests_per_minute": 100}
     input_schema = {
         "type": "object",
         "properties": {

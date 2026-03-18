@@ -87,6 +87,8 @@ class ComplianceCheckerTool(BaseTool):
         "Analyze a solicitation's clauses against FAR/DFARS requirements. "
         "Returns a compliance score, missing required clauses, and recommendations."
     )
+    auth_requirements: list = []
+    rate_limit_profile: dict = {"requests_per_minute": 100}
     input_schema = {
         "type": "object",
         "properties": {

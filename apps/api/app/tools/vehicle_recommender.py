@@ -144,6 +144,8 @@ class VehicleRecommenderTool(BaseTool):
     id = "vehicle.recommend"
     name = "Contract Vehicle Recommender"
     description = "Recommend the best GWAC, IDIQ, GSA Schedule, or open market approach for a requirement."
+    auth_requirements: list = []
+    rate_limit_profile: dict = {"requests_per_minute": 100}
     input_schema = {
         "type": "object",
         "properties": {
