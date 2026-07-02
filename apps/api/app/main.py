@@ -1,6 +1,7 @@
 """FastAPI application factory and configuration."""
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import AsyncGenerator
 
 from fastapi import FastAPI, Request
@@ -76,16 +77,40 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         db_engine, class_=AsyncSession, expire_on_commit=False, autoflush=False
     )
 
-    # Create tables
-    async with db_engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-        # Add columns that may not exist in already-created tables (idempotent)
-        await conn.execute(
-            __import__("sqlalchemy").text(
-                "ALTER TABLE messages ADD COLUMN IF NOT EXISTS feedback INTEGER"
+    # Schema management.
+    # dev: auto-create tables so a fresh clone runs with zero setup.
+    # prod: the schema is owned by Alembic — never auto-create; instead
+    #       verify the DB is migrated to head and fail fast if it is not,
+    #       so we never serve traffic against a drifted/unmigrated schema.
+    if settings.ENVIRONMENT == "dev":
+        async with db_engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+            # Add columns that may not exist in already-created tables (idempotent)
+            await conn.execute(
+                __import__("sqlalchemy").text(
+                    "ALTER TABLE messages ADD COLUMN IF NOT EXISTS feedback INTEGER"
+                )
             )
-        )
-    logger.info("database_initialized")
+        logger.info("database_initialized", mode="create_all")
+    else:
+        from alembic.config import Config as _AlembicConfig
+        from alembic.script import ScriptDirectory
+        from alembic.runtime.migration import MigrationContext
+
+        alembic_cfg = _AlembicConfig(str(Path(__file__).resolve().parents[1] / "alembic.ini"))
+        head_rev = ScriptDirectory.from_config(alembic_cfg).get_current_head()
+
+        def _current_rev(sync_conn):
+            return MigrationContext.configure(sync_conn).get_current_revision()
+
+        async with db_engine.connect() as conn:
+            db_rev = await conn.run_sync(_current_rev)
+        if db_rev != head_rev:
+            raise RuntimeError(
+                f"Database schema is not at Alembic head (db={db_rev}, head={head_rev}). "
+                f"Run `alembic upgrade head` before starting in {settings.ENVIRONMENT}."
+            )
+        logger.info("database_initialized", mode="alembic", revision=db_rev)
 
     # Initialize cache service
     cache_service = CacheService(settings.REDIS_URL)

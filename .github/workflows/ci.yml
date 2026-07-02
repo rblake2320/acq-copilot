@@ -53,6 +53,31 @@ jobs:
           print('All imports OK')
           "
 
+      - name: Admin router is auth-guarded (regression guard)
+        env:
+          DATABASE_URL: postgresql+asyncpg://postgres:password@localhost:5432/test
+          REDIS_URL: redis://localhost:6379/0
+          ENVIRONMENT: dev
+        run: |
+          python -c "
+          from app.routers import admin
+          deps = getattr(admin.router, 'dependencies', [])
+          names = [getattr(getattr(d, 'dependency', None), '__name__', '') for d in deps]
+          assert 'require_admin' in names, f'admin router is missing require_admin guard: {names}'
+          print('Admin router guarded by:', names)
+          "
+
+      - name: Credential scrubbing works
+        run: |
+          python -c "
+          from app.tools.base import sanitize_error
+          leaked = \"401 for url 'https://api.sam.gov/v2/search?api_key=SECRET123&limit=10'\"
+          out = sanitize_error(leaked)
+          assert 'SECRET123' not in out, 'sanitize_error failed to redact the key'
+          assert 'REDACTED' in out
+          print('Credential scrubbing OK:', out)
+          "
+
   frontend:
     name: Frontend (Next.js)
     runs-on: ubuntu-latest
@@ -72,7 +97,7 @@ jobs:
         run: npm install --legacy-peer-deps
 
       - name: Type check
-        run: npm run type-check || npx tsc --noEmit
+        run: npm run type-check
 
       - name: Lint
         run: npm run lint

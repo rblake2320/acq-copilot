@@ -1,4 +1,5 @@
 """Administrative endpoints."""
+import secrets as _secrets
 from datetime import datetime
 from typing import Optional
 import json
@@ -6,7 +7,7 @@ import re
 from pathlib import Path
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 import structlog
@@ -18,8 +19,36 @@ from ..schemas.common import HealthResponse, AuditEventResponse, CacheStatsRespo
 from ..config import settings
 from ..models.database import Conversation, Message, ToolRun
 
-router = APIRouter()
 logger = structlog.get_logger(__name__)
+
+
+async def require_admin(request: Request) -> None:
+    """Guard for all /api/admin endpoints.
+
+    - ADMIN_API_TOKEN set: require a matching Bearer token (constant-time compare).
+    - ADMIN_API_TOKEN empty: open in dev only; fail closed everywhere else so a
+      misconfigured production deploy can never expose the admin plane.
+    """
+    token = settings.ADMIN_API_TOKEN
+    if not token:
+        if settings.ENVIRONMENT == "dev":
+            return
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Admin API disabled: set ADMIN_API_TOKEN to enable admin access outside dev",
+        )
+
+    auth = request.headers.get("Authorization", "")
+    provided = auth.removeprefix("Bearer ").strip() if auth.startswith("Bearer ") else ""
+    if not provided or not _secrets.compare_digest(provided, token):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or missing admin token",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+
+router = APIRouter(dependencies=[Depends(require_admin)])
 
 # Mapping of service names to the Settings attribute that holds their API key
 _SERVICE_KEY_MAP = {
@@ -331,15 +360,23 @@ async def set_api_key(request: SetApiKeyRequest) -> dict:
         # Update in-place on the singleton settings object
         object.__setattr__(settings, attr, request.key.strip())
 
-        # Persist to .env so the key survives server restarts
-        _persist_key_to_env(attr, request.key.strip())
+        # Persisting secrets by rewriting .env is a dev convenience only —
+        # production secrets must come from the deployment's secret store.
+        if settings.ENVIRONMENT == "dev":
+            _persist_key_to_env(attr, request.key.strip())
+            persistence = "set and persisted to .env"
+        else:
+            persistence = (
+                "set for the running process only — update the deployment's "
+                "secret store to persist across restarts"
+            )
 
-        logger.info("api_key_set", service=service, attr=attr)
+        logger.info("api_key_set", service=service, attr=attr, environment=settings.ENVIRONMENT)
 
         return {
             "service": service,
             "configured": True,
-            "message": f"API key for '{service}' has been set and persisted to .env",
+            "message": f"API key for '{service}' has been {persistence}",
         }
     except HTTPException:
         raise

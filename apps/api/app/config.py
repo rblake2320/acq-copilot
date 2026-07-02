@@ -83,6 +83,10 @@ class Settings(BaseSettings):
         description="Secret key for JWT signing",
     )
     ALGORITHM: str = Field(default="HS256", description="JWT algorithm")
+    ADMIN_API_TOKEN: str = Field(
+        default="",
+        description="Bearer token required for /api/admin. Empty = dev-only open access; prod refuses admin requests until set.",
+    )
 
     # CORS
     CORS_ORIGINS: list[str] = Field(
