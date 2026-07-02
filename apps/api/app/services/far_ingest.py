@@ -1,10 +1,13 @@
 """FAR/DFARS document ingestion service.
 
-Downloads FAR XML from GitHub (GSA/GSA-Acquisition-FAR) and ingests
-into the far_sections table with embeddings via Ollama nomic-embed-text.
+Fetches all DITA section files from GSA/GSA-Acquisition-FAR on GitHub and
+ingests them into the far_sections table with pgvector embeddings.
+
+Each file is an individual FAR section (e.g. 15.101-1.dita = FAR 15.101-1).
 
 Usage:
-    python -m app.services.far_ingest  (run directly)
+    python -m app.services.far_ingest          # all 3,900+ sections
+    python -m app.services.far_ingest 1 2 7    # specific parts only
 """
 
 import re
@@ -21,154 +24,195 @@ from sqlalchemy import text
 
 logger = logging.getLogger(__name__)
 
-# FAR GitHub raw content base
-FAR_GITHUB_BASE = "https://raw.githubusercontent.com/GSA/GSA-Acquisition-FAR/main/dita"
+FAR_GITHUB_API = "https://api.github.com/repos/GSA/GSA-Acquisition-FAR/git/trees/master?recursive=1"
+FAR_RAW_BASE = "https://raw.githubusercontent.com/GSA/GSA-Acquisition-FAR/master/dita"
 OLLAMA_EMBED_URL = "http://localhost:11434/api/embeddings"
 EMBED_MODEL = "nomic-embed-text"
 
-# FAR parts to ingest (all 53 parts)
-FAR_PARTS = list(range(1, 54))
-
-# Max characters per chunk (to keep embeddings meaningful)
-CHUNK_SIZE = 1500
-CHUNK_OVERLAP = 200
+# Max workers for concurrent embedding+fetch
+CONCURRENCY = 8
 
 
-async def get_embedding(text: str, client: httpx.AsyncClient) -> Optional[list[float]]:
+async def get_embedding(txt: str, client: httpx.AsyncClient) -> Optional[list[float]]:
     """Get embedding from Ollama nomic-embed-text."""
     try:
         response = await client.post(
             OLLAMA_EMBED_URL,
-            json={"model": EMBED_MODEL, "prompt": text},
+            json={"model": EMBED_MODEL, "prompt": txt},
             timeout=30.0,
         )
         if response.status_code == 200:
             return response.json().get("embedding")
     except Exception as e:
-        logger.warning(f"Embedding failed: {e}")
+        logger.debug(f"Embedding failed: {e}")
     return None
 
 
-def extract_text_from_xml(xml_content: str) -> list[dict]:
-    """Extract sections from FAR DITA XML.
+def parse_dita(xml_content: str, filename: str) -> Optional[dict]:
+    """Parse a FAR DITA section file.
 
-    Returns list of dicts with: section, title, content
+    Returns dict with: section, title, content, part
     """
-    sections = []
+    # Derive section number from filename: "15.101-1.dita" -> "15.101-1"
+    section = filename.replace(".dita", "")
+
+    # Strip DOCTYPE declaration — ET can't fetch the external DTD
+    xml_clean = re.sub(r'<!DOCTYPE[^>]*(?:>|(?:\[[^\]]*\])\s*>)', '', xml_content)
+
     try:
-        root = ET.fromstring(xml_content)
-        ns = {"dita": ""}  # DITA XML may have no namespace
-
-        # Try to find section elements
-        for elem in root.iter():
-            tag = elem.tag.lower().split("}")[-1]  # strip namespace
-            if tag in ("section", "topic", "concept"):
-                title_elem = elem.find(".//{*}title") or elem.find("title")
-                title = title_elem.text.strip() if title_elem is not None and title_elem.text else "Untitled"
-
-                # Get all text content
-                content_parts = []
-                for child in elem.iter():
-                    child_tag = child.tag.lower().split("}")[-1]
-                    if child_tag in ("p", "li", "dd", "entry", "ph"):
-                        if child.text:
-                            content_parts.append(child.text.strip())
-
-                content = " ".join(content_parts)
-                if len(content) > 50:  # Skip tiny sections
-                    sections.append({
-                        "title": title,
-                        "content": content,
-                    })
+        root = ET.fromstring(xml_clean)
     except ET.ParseError as e:
-        logger.warning(f"XML parse error: {e}")
+        logger.debug(f"XML parse error for {filename}: {e}")
+        return None
 
-    return sections
+    # Extract title — look for <ph props="autonumber"> inside <title>
+    title = ""
+    for title_elem in root.iter():
+        tag = title_elem.tag.split("}")[-1].lower()
+        if tag == "title":
+            # Get text content, stripping the section number from ph
+            parts = []
+            if title_elem.text:
+                parts.append(title_elem.text.strip())
+            for child in title_elem:
+                child_tag = child.tag.split("}")[-1].lower()
+                if child_tag == "ph" and child.get("props") == "autonumber":
+                    # Skip — this is just the section number
+                    if child.tail:
+                        parts.append(child.tail.strip())
+                else:
+                    if child.text:
+                        parts.append(child.text.strip())
+                    if child.tail:
+                        parts.append(child.tail.strip())
+            title = " ".join(p for p in parts if p).strip()
+            break
+
+    if not title:
+        title = f"FAR {section}"
+
+    # Extract body text
+    content_parts = []
+    for elem in root.iter():
+        tag = elem.tag.split("}")[-1].lower()
+        if tag in ("p", "li", "dd", "entry", "ph", "keyword", "term"):
+            if elem.text and elem.text.strip():
+                content_parts.append(elem.text.strip())
+            if elem.tail and elem.tail.strip():
+                content_parts.append(elem.tail.strip())
+
+    content = " ".join(content_parts)
+
+    if len(content) < 10:
+        return None  # empty section
+
+    # Derive part number
+    part_match = re.match(r"^(\d+)", section)
+    part = int(part_match.group(1)) if part_match else 0
+
+    return {
+        "section": section,
+        "title": title.strip(),
+        "content": content,
+        "part": part,
+    }
 
 
-def chunk_text(text: str, chunk_size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP) -> list[str]:
-    """Split text into overlapping chunks."""
-    if len(text) <= chunk_size:
-        return [text]
+async def fetch_dita_file_list(client: httpx.AsyncClient, parts_filter: Optional[list[int]] = None) -> list[str]:
+    """Get list of all DITA filenames from GitHub."""
+    logger.info("Fetching FAR file index from GitHub...")
+    response = await client.get(FAR_GITHUB_API, timeout=30.0)
+    response.raise_for_status()
 
-    chunks = []
-    start = 0
-    while start < len(text):
-        end = start + chunk_size
-        chunk = text[start:end]
-        chunks.append(chunk)
-        start = end - overlap
+    tree = response.json().get("tree", [])
+    dita_files = [
+        item["path"].split("/")[-1]
+        for item in tree
+        if item["path"].startswith("dita/") and item["path"].endswith(".dita")
+    ]
 
-    return chunks
+    if parts_filter:
+        dita_files = [
+            f for f in dita_files
+            if (m := re.match(r"^(\d+)", f)) and int(m.group(1)) in parts_filter
+        ]
 
-
-async def fetch_far_part(part: int, client: httpx.AsyncClient) -> Optional[str]:
-    """Fetch a FAR part XML from GitHub."""
-    # FAR files are named like Part_001.xml, Part_015.xml, etc.
-    part_str = str(part).zfill(3)
-    url = f"{FAR_GITHUB_BASE}/Part_{part_str}.xml"
-
-    try:
-        response = await client.get(url, timeout=30.0)
-        if response.status_code == 200:
-            return response.text
-        logger.debug(f"FAR Part {part}: HTTP {response.status_code}")
-    except Exception as e:
-        logger.warning(f"FAR Part {part} fetch error: {e}")
-
-    return None
+    logger.info(f"Found {len(dita_files)} DITA section files")
+    return sorted(dita_files)
 
 
-async def ingest_far_section(
+async def ingest_section(
     db: AsyncSession,
-    regulation: str,
-    part: int,
-    section: str,
-    title: str,
-    content: str,
-    chunk_index: int,
-    source_url: str,
-    client: httpx.AsyncClient,
+    section_data: dict,
+    embedding: Optional[list[float]],
 ) -> None:
-    """Ingest a single FAR section chunk."""
-    # Get embedding
-    embed_text = f"{section}: {title}\n{content[:500]}"  # truncate for embedding
-    embedding = await get_embedding(embed_text, client)
-
+    """Upsert a single FAR section."""
     embedding_json = json.dumps(embedding) if embedding else None
+    source_url = f"https://www.acquisition.gov/far/part-{section_data['part']}#{section_data['section'].replace('.', '_')}"
 
     await db.execute(
         text("""
             INSERT INTO far_sections
                 (regulation, part, section, title, content, chunk_index, source_url, embedding_json, created_at)
             VALUES
-                (:regulation, :part, :section, :title, :content, :chunk_index, :source_url, :embedding_json, :created_at)
-            ON CONFLICT DO NOTHING
+                (:regulation, :part, :section, :title, :content, 0, :source_url, :embedding_json, :created_at)
+            ON CONFLICT (regulation, section, chunk_index) DO UPDATE SET
+                title = EXCLUDED.title,
+                content = EXCLUDED.content,
+                source_url = EXCLUDED.source_url,
+                embedding_json = COALESCE(EXCLUDED.embedding_json, far_sections.embedding_json)
         """),
         {
-            "regulation": regulation,
-            "part": part,
-            "section": section,
-            "title": title,
-            "content": content,
-            "chunk_index": chunk_index,
+            "regulation": "FAR",
+            "part": section_data["part"],
+            "section": section_data["section"],
+            "title": section_data["title"],
+            "content": section_data["content"],
             "source_url": source_url,
             "embedding_json": embedding_json,
             "created_at": datetime.utcnow(),
-        }
+        },
     )
+
+
+async def process_file(
+    filename: str,
+    http_client: httpx.AsyncClient,
+    make_session,
+    semaphore: asyncio.Semaphore,
+) -> bool:
+    """Fetch, parse, embed, and store one DITA file (own session per task)."""
+    async with semaphore:
+        try:
+            url = f"{FAR_RAW_BASE}/{filename}"
+            response = await http_client.get(url, timeout=20.0)
+            if response.status_code != 200:
+                return False
+
+            section_data = parse_dita(response.text, filename)
+            if not section_data:
+                return False
+
+            # Embed: section number + title + start of content
+            embed_text = f"FAR {section_data['section']}: {section_data['title']}\n{section_data['content'][:800]}"
+            embedding = await get_embedding(embed_text, http_client)
+
+            async with make_session() as db:
+                await ingest_section(db, section_data, embedding)
+                await db.commit()
+            return True
+        except Exception as e:
+            logger.warning(f"Error processing {filename}: {e}")
+            return False
 
 
 async def run_ingest(db_url: str, parts: Optional[list[int]] = None):
     """Main ingest function.
 
     Args:
-        db_url: PostgreSQL connection string (asyncpg)
-        parts: List of FAR parts to ingest (default: all 53)
+        db_url: PostgreSQL asyncpg connection string
+        parts: Specific FAR part numbers to ingest (default: all)
     """
-    if parts is None:
-        parts = FAR_PARTS
-
     engine = create_async_engine(db_url, echo=False)
     async_session = async_sessionmaker(engine, expire_on_commit=False)
 
@@ -193,136 +237,60 @@ async def run_ingest(db_url: str, parts: Optional[list[int]] = None):
         await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_far_sections_regulation ON far_sections(regulation)"))
         await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_far_sections_part ON far_sections(part)"))
         await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_far_sections_section ON far_sections(section)"))
+        # Tables created by Base.metadata.create_all before this constraint existed
+        # lack the uniqueness the upsert relies on — dedupe, then enforce it.
+        await conn.execute(text("""
+            DELETE FROM far_sections a USING far_sections b
+            WHERE a.id > b.id
+              AND a.regulation = b.regulation
+              AND a.section = b.section
+              AND a.chunk_index = b.chunk_index
+        """))
+        await conn.execute(text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS ux_far_sections_reg_section_chunk "
+            "ON far_sections(regulation, section, chunk_index)"
+        ))
 
-    async with httpx.AsyncClient() as client:
-        for part in parts:
-            logger.info(f"Ingesting FAR Part {part}...")
-            xml_content = await fetch_far_part(part, client)
+    semaphore = asyncio.Semaphore(CONCURRENCY)
 
-            if not xml_content:
-                # Create a placeholder entry with FAR part overview text
-                await _ingest_placeholder(part, client, async_session)
-                continue
+    async with httpx.AsyncClient() as http_client:
+        filenames = await fetch_dita_file_list(http_client, parts)
 
-            sections = extract_text_from_xml(xml_content)
-            source_url = f"https://www.acquisition.gov/far/part-{part}"
+        done = 0
+        errors = 0
+        batch_size = 50
 
-            async with async_session() as db:
-                for section_data in sections:
-                    chunks = chunk_text(section_data["content"])
-                    for i, chunk in enumerate(chunks):
-                        section_id = f"{part}.{i+1}" if len(sections) == 1 else section_data.get("id", f"{part}.x")
-                        await ingest_far_section(
-                            db=db,
-                            regulation="FAR",
-                            part=part,
-                            section=f"Part {part}",
-                            title=section_data["title"],
-                            content=chunk,
-                            chunk_index=i,
-                            source_url=source_url,
-                            client=client,
-                        )
-                await db.commit()
+        for i in range(0, len(filenames), batch_size):
+            batch = filenames[i:i + batch_size]
+            tasks = [
+                process_file(fn, http_client, async_session, semaphore)
+                for fn in batch
+            ]
+            results = await asyncio.gather(*tasks)
+            done += sum(results)
+            errors += sum(1 for r in results if not r)
 
-            logger.info(f"FAR Part {part}: {len(sections)} sections ingested")
-            await asyncio.sleep(0.1)  # Rate limit Ollama
+            if (i // batch_size) % 5 == 0:
+                logger.info(f"Progress: {done}/{len(filenames)} sections ingested, {errors} skipped")
 
     await engine.dispose()
-    logger.info("FAR ingest complete")
-
-
-async def _ingest_placeholder(part: int, client: httpx.AsyncClient, async_session):
-    """Ingest basic FAR part info when XML is unavailable."""
-    far_part_titles = {
-        1: "Federal Acquisition Regulations System",
-        2: "Definitions of Words and Terms",
-        3: "Improper Business Practices and Personal Conflicts of Interest",
-        4: "Administrative and Information Matters",
-        5: "Publicizing Contract Actions",
-        6: "Competition Requirements",
-        7: "Acquisition Planning",
-        8: "Required Sources of Supplies and Services",
-        9: "Contractor Qualifications",
-        10: "Market Research",
-        11: "Describing Agency Needs",
-        12: "Acquisition of Commercial Products and Commercial Services",
-        13: "Simplified Acquisition Procedures",
-        14: "Sealed Bidding",
-        15: "Contracting by Negotiation",
-        16: "Types of Contracts",
-        17: "Special Contracting Methods",
-        18: "Emergency Acquisitions",
-        19: "Small Business Programs",
-        20: "Reserved",
-        21: "Reserved",
-        22: "Application of Labor Laws to Government Acquisitions",
-        23: "Environment, Energy and Water Efficiency, Renewable Energy Technologies, Occupational Safety, and Drug-Free Workplace",
-        24: "Protection of Privacy and Freedom of Information",
-        25: "Foreign Acquisition",
-        26: "Other Socioeconomic Programs",
-        27: "Patents, Data, and Copyrights",
-        28: "Bonds and Insurance",
-        29: "Taxes",
-        30: "Cost Accounting Standards Administration",
-        31: "Contract Cost Principles and Procedures",
-        32: "Contract Financing",
-        33: "Protests, Disputes, and Appeals",
-        34: "Major System Acquisition",
-        35: "Research and Development Contracting",
-        36: "Construction and Architect-Engineer Contracts",
-        37: "Service Contracting",
-        38: "Federal Supply Schedule Contracting",
-        39: "Acquisition of Information Technology",
-        40: "Reserved",
-        41: "Acquisition of Utility Services",
-        42: "Contract Administration and Audit Services",
-        43: "Contract Modifications",
-        44: "Subcontracting Policies and Procedures",
-        45: "Government Property",
-        46: "Quality Assurance",
-        47: "Transportation",
-        48: "Value Engineering",
-        49: "Termination of Contracts",
-        50: "Extraordinary Contractual Actions and the Safety Act",
-        51: "Use of Government Sources by Contractors",
-        52: "Solicitation Provisions and Contract Clauses",
-        53: "Forms",
-    }
-
-    title = far_part_titles.get(part, f"FAR Part {part}")
-    content = f"FAR Part {part}: {title}. This part of the Federal Acquisition Regulation covers {title.lower()}. For detailed provisions, consult the official FAR at acquisition.gov/far/part-{part}."
-    source_url = f"https://www.acquisition.gov/far/part-{part}"
-
-    async with async_session() as db:
-        await ingest_far_section(
-            db=db,
-            regulation="FAR",
-            part=part,
-            section=f"Part {part}",
-            title=title,
-            content=content,
-            chunk_index=0,
-            source_url=source_url,
-            client=client,
-        )
-        await db.commit()
+    logger.info(f"FAR ingest complete: {done} sections, {errors} skipped")
+    return done
 
 
 if __name__ == "__main__":
     import sys
     import os
 
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(message)s",
+    )
 
-    # Get DB URL from environment
     db_url = os.environ.get(
         "DATABASE_URL",
         "postgresql+asyncpg://postgres:%3FBooker78%21@localhost:5432/postgres"
     )
 
-    parts = None
-    if len(sys.argv) > 1:
-        parts = [int(p) for p in sys.argv[1:]]
-
+    parts = [int(p) for p in sys.argv[1:]] if len(sys.argv) > 1 else None
     asyncio.run(run_ingest(db_url, parts))

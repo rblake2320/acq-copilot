@@ -12,6 +12,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     JSON,
+    UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import declarative_base, relationship, mapped_column
@@ -227,4 +228,8 @@ class FARSection(Base):
         Index("ix_far_sections_regulation", "regulation"),
         Index("ix_far_sections_part", "part"),
         Index("ix_far_sections_section", "section"),
+        UniqueConstraint(
+            "regulation", "section", "chunk_index",
+            name="ux_far_sections_reg_section_chunk",
+        ),
     )

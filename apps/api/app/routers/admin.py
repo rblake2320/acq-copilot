@@ -597,3 +597,43 @@ async def export_training_data_full(
     except Exception as e:
         logger.error("export_training_data_full_failed", error=str(e))
         raise HTTPException(status_code=500, detail="Failed to export full training data")
+
+
+# ── FAR Corpus Ingest ─────────────────────────────────────────────────────────
+
+_ingest_task: dict = {"running": False, "parts_done": 0, "total": 53, "error": None}
+
+
+@router.post("/rag/ingest")
+async def trigger_far_ingest(parts: Optional[list[int]] = None) -> dict:
+    """Trigger FAR corpus ingestion in background."""
+    import asyncio
+    from ..services.far_ingest import run_ingest
+
+    if _ingest_task["running"]:
+        return {"status": "already_running", "progress": _ingest_task}
+
+    db_url = settings.DATABASE_URL
+    total_parts = len(parts) if parts else 53
+
+    async def _run():
+        _ingest_task["running"] = True
+        _ingest_task["parts_done"] = 0
+        _ingest_task["total"] = total_parts
+        _ingest_task["error"] = None
+        try:
+            await run_ingest(db_url, parts)
+            _ingest_task["parts_done"] = _ingest_task["total"]
+        except Exception as e:
+            _ingest_task["error"] = str(e)
+        finally:
+            _ingest_task["running"] = False
+
+    asyncio.create_task(_run())
+    return {"status": "started", "progress": _ingest_task}
+
+
+@router.get("/rag/ingest/status")
+async def ingest_status() -> dict:
+    """Get current ingest progress."""
+    return _ingest_task
