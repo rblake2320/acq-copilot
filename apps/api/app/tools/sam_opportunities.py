@@ -5,7 +5,7 @@ from typing import Optional, Any
 from pydantic import BaseModel
 import structlog
 
-from .base import BaseTool, Citation
+from .base import BaseTool, Citation, sanitize_error
 
 logger = structlog.get_logger(__name__)
 
@@ -35,6 +35,7 @@ class SamSearchOutput(BaseModel):
     query: str
     filters_applied: dict
     api_key_configured: bool = False
+    message: Optional[str] = None
 
 
 class SamSearchTool(BaseTool):
@@ -118,9 +119,16 @@ class SamSearchTool(BaseTool):
             headers={"Accept": "application/json"},
         )
 
-        if response.status_code == 403:
-            logger.warning("sam_api_key_invalid_or_missing")
-            return self._no_api_key_output(query)
+        if response.status_code in (401, 403):
+            logger.warning("sam_api_key_rejected", status_code=response.status_code)
+            return self._no_api_key_output(
+                query,
+                message=(
+                    "SAM.gov rejected the configured API key "
+                    f"(HTTP {response.status_code}). SAM.gov keys expire every "
+                    "90 days — regenerate it in your SAM.gov account profile."
+                ),
+            )
 
         response.raise_for_status()
         data = response.json()
@@ -182,7 +190,7 @@ class SamSearchTool(BaseTool):
             return f"{city}, {state}"
         return state or city or None
 
-    def _no_api_key_output(self, query: str) -> dict:
+    def _no_api_key_output(self, query: str, message: Optional[str] = None) -> dict:
         """Return structured output when no valid SAM.gov API key is configured."""
         return SamSearchOutput(
             opportunities=[],
@@ -190,6 +198,7 @@ class SamSearchTool(BaseTool):
             query=query,
             filters_applied={},
             api_key_configured=False,
+            message=message,
         ).model_dump()
 
     def build_citations(self, params: dict, output: Any) -> list[Citation]:
@@ -223,7 +232,7 @@ class SamSearchTool(BaseTool):
         ]
 
     async def healthcheck(self) -> dict[str, Any]:
-        """Check SAM.gov API key configuration."""
+        """Verify the SAM.gov API key against the live API, not just its presence."""
         try:
             from ..config import settings as _settings
             api_key = getattr(_settings, "SAM_API_KEY", "") or ""
@@ -232,9 +241,38 @@ class SamSearchTool(BaseTool):
         if not api_key:
             import os as _os
             api_key = _os.environ.get("SAM_API_KEY", "")
-        if api_key:
-            return {"tool_id": self.id, "status": "healthy", "message": "API key configured"}
-        return {"tool_id": self.id, "status": "unhealthy", "message": "No API key — set via Admin > API Keys"}
+        if not api_key:
+            return {"tool_id": self.id, "status": "unhealthy", "message": "No API key — set via Admin > API Keys"}
+
+        posted_to = datetime.utcnow()
+        posted_from = posted_to - timedelta(days=1)
+        try:
+            response = await self._client.get(
+                SAM_API_BASE,
+                params={
+                    "api_key": api_key,
+                    "limit": 1,
+                    "postedFrom": posted_from.strftime("%m/%d/%Y"),
+                    "postedTo": posted_to.strftime("%m/%d/%Y"),
+                },
+                timeout=10.0,
+                headers={"Accept": "application/json"},
+            )
+        except Exception as e:
+            return {"tool_id": self.id, "status": "unhealthy", "message": sanitize_error(str(e))}
+
+        if response.status_code == 200:
+            return {"tool_id": self.id, "status": "healthy", "message": "API key verified against live SAM.gov API"}
+        if response.status_code in (401, 403):
+            return {
+                "tool_id": self.id,
+                "status": "unhealthy",
+                "message": (
+                    f"SAM.gov rejected the API key (HTTP {response.status_code}) — "
+                    "keys expire every 90 days; regenerate in your SAM.gov profile"
+                ),
+            }
+        return {"tool_id": self.id, "status": "degraded", "message": f"SAM.gov returned HTTP {response.status_code}"}
 
     def get_examples(self) -> list[dict]:
         """Return example invocations."""

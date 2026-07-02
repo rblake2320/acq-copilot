@@ -307,8 +307,18 @@ class PriceReasonablenessTool(BaseTool):
                     assessment = "fair"
 
             if assessment == "fair" and range_low and range_high:
+                if proposed_rate < range_low:
+                    position = (
+                        f"slightly below the market range low (within the 15% tolerance band)"
+                    )
+                elif proposed_rate > range_high:
+                    position = (
+                        f"slightly above the market range high (within the 15% tolerance band)"
+                    )
+                else:
+                    position = "within the market range"
                 summary = (
-                    f"${proposed_rate:.2f}/hr appears FAIR. "
+                    f"${proposed_rate:.2f}/hr appears FAIR — {position}. "
                     f"Market range: ${range_low:.2f}–${range_high:.2f}/hr for {experience} {occupation or soc_code}."
                 )
             elif assessment == "high" and range_high:

@@ -44,9 +44,17 @@ const KNOWN_SERVICES = [
 export default function AdminPage() {
   const queryClient = useQueryClient();
 
-  // Verify state: null = not checked, true = configured, false = not configured
-  const [verifyResults, setVerifyResults] = useState<Record<string, boolean | null>>({});
+  // Verify state: null = not checked, otherwise a status string
+  const [verifyResults, setVerifyResults] = useState<Record<string, string | null>>({});
   const [verifyingService, setVerifyingService] = useState<string | null>(null);
+
+  // valid=true → live-verified; valid=false → key present but rejected (or absent);
+  // valid=null → presence-only check, treat configured as the best signal we have.
+  const statusFromVerify = (res: { valid: boolean | null; configured: boolean }): string => {
+    if (res.valid === true) return "valid";
+    if (res.valid === false) return res.configured ? "invalid" : "not configured";
+    return res.configured ? "valid" : "not configured";
+  };
 
   // Key input state per service
   const [keyInputs, setKeyInputs] = useState<Record<string, string>>({});
@@ -58,9 +66,9 @@ export default function AdminPage() {
     setVerifyingService(serviceId);
     try {
       const res = await apiClient.admin.verifyAPIKey(serviceId);
-      setVerifyResults((prev) => ({ ...prev, [serviceId]: res.valid }));
+      setVerifyResults((prev) => ({ ...prev, [serviceId]: statusFromVerify(res) }));
     } catch {
-      setVerifyResults((prev) => ({ ...prev, [serviceId]: false }));
+      setVerifyResults((prev) => ({ ...prev, [serviceId]: "error" }));
     } finally {
       setVerifyingService(null);
     }
@@ -73,7 +81,8 @@ export default function AdminPage() {
     try {
       await apiClient.admin.setAPIKey(serviceId, key);
       setSaveStatus((prev) => ({ ...prev, [serviceId]: "saved" }));
-      setVerifyResults((prev) => ({ ...prev, [serviceId]: true }));
+      // Re-verify rather than assuming a freshly saved key is valid
+      void handleVerify(serviceId);
       // Refresh key status
       queryClient.invalidateQueries({ queryKey: ["api-keys"] });
       setTimeout(() => setSaveStatus((prev) => ({ ...prev, [serviceId]: "idle" })), 3000);
@@ -97,14 +106,14 @@ export default function AdminPage() {
   useEffect(() => {
     if (apiKeys.length === 0) return;
     const run = async () => {
-      const results: Record<string, boolean> = {};
+      const results: Record<string, string> = {};
       await Promise.allSettled(
         KNOWN_SERVICES.map(async (svc) => {
           try {
             const res = await apiClient.admin.verifyAPIKey(svc.id);
-            results[svc.id] = res.valid;
+            results[svc.id] = statusFromVerify(res);
           } catch {
-            results[svc.id] = false;
+            results[svc.id] = "error";
           }
         })
       );
@@ -150,8 +159,7 @@ export default function AdminPage() {
   // Merge backend data + verify results into a single status string per service
   const getServiceStatus = (serviceId: string): string => {
     const verified = verifyResults[serviceId];
-    if (verified === true) return "valid";
-    if (verified === false) return "not configured";
+    if (verified) return verified;
     const backendKey = apiKeys.find((k: APIKeyStatus) => k.service === serviceId);
     if (backendKey) return backendKey.configured ? "valid" : "unconfigured";
     return "unconfigured";

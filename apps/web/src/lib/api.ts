@@ -423,7 +423,9 @@ class APIClient {
       });
     },
 
-    verifyAPIKey: async (service: string): Promise<{ valid: boolean }> => {
+    verifyAPIKey: async (
+      service: string
+    ): Promise<{ valid: boolean | null; configured: boolean; message: string }> => {
       return this.request("/admin/verify-api-key", {
         method: "POST",
         body: JSON.stringify({ service }),

@@ -1,10 +1,23 @@
 """Abstract base class and models for all tools."""
+import re
 from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import Any, Optional
 from pydantic import BaseModel, Field
 import httpx
 import time
+
+# Credentials passed as query params (e.g. SAM.gov api_key) end up in httpx
+# exception text via the request URL — scrub them before errors reach clients.
+_CREDENTIAL_RE = re.compile(
+    r"((?:api[_-]?key|apikey|access[_-]?token|token|key|secret)=)[^&\s'\"]+",
+    re.IGNORECASE,
+)
+
+
+def sanitize_error(message: str) -> str:
+    """Redact credential values from error text destined for API responses."""
+    return _CREDENTIAL_RE.sub(r"\1REDACTED", message)
 
 
 class ToolInput(BaseModel):
@@ -97,7 +110,7 @@ class BaseTool(ABC):
                 citations=[],
                 duration_ms=round(duration, 2),
                 status="timeout",
-                error_message=str(e),
+                error_message=sanitize_error(str(e)),
             )
         except Exception as e:
             duration = (time.monotonic() - start) * 1000
@@ -108,7 +121,7 @@ class BaseTool(ABC):
                 citations=[],
                 duration_ms=round(duration, 2),
                 status="error",
-                error_message=str(e),
+                error_message=sanitize_error(str(e)),
             )
 
     @abstractmethod

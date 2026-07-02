@@ -2,7 +2,6 @@
 from datetime import datetime
 from typing import Optional
 import json
-import os
 import re
 from pathlib import Path
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -34,6 +33,12 @@ _SERVICE_KEY_MAP = {
     "census": "CENSUS_API_KEY",
     "sam_gov": "SAM_API_KEY",
     "nvidia_ngc": "NGC_API_KEY",
+}
+
+# Services whose keys can be verified with a live API call via the owning
+# tool's healthcheck. Everything else is a presence-only check.
+_LIVE_PROBE_TOOLS = {
+    "sam_gov": "sam.search_opportunities",
 }
 
 # Path to the .env file (two levels up from this router file: api/app/routers -> api/)
@@ -143,16 +148,6 @@ async def tools_status() -> dict:
     try:
         registry = get_registry()
         health = await registry.health_check_all()
-        # Override SAM health: if API key is configured, treat as healthy regardless of HTTP response
-        sam_key = getattr(settings, "SAM_API_KEY", "") or os.environ.get("SAM_API_KEY", "")
-        if "sam.search_opportunities" in health and sam_key:
-            h = health["sam.search_opportunities"]
-            if h.get("status") != "healthy":
-                health["sam.search_opportunities"] = {
-                    "tool_id": "sam.search_opportunities",
-                    "status": "healthy",
-                    "message": "API key configured",
-                }
         return {
             "total_tools": registry.count(),
             "health_checks": health,
@@ -383,13 +378,31 @@ async def verify_api_key(request: VerifyApiKeyRequest) -> dict:
         value = getattr(settings, attr, None)
         configured = bool(value)
 
-        logger.info("api_key_verified", service=service, configured=configured)
+        valid: Optional[bool] = False if not configured else None
+        message = f"API key for '{service}' is {'configured' if configured else 'not configured'}"
+
+        # Presence alone is not validity — probe the live API where a tool
+        # supports it, otherwise report valid=None so the UI can't show a
+        # green check for a key that was never actually tested.
+        probe_tool_id = _LIVE_PROBE_TOOLS.get(service)
+        if configured and probe_tool_id:
+            from ..tools.registry import get_registry
+
+            tool = get_registry().get(probe_tool_id)
+            if tool:
+                hc = await tool.healthcheck()
+                valid = hc.get("status") == "healthy"
+                message = hc.get("message", message)
+        elif configured:
+            message = f"API key for '{service}' is configured (presence check only — not live-verified)"
+
+        logger.info("api_key_verified", service=service, configured=configured, valid=valid)
 
         return {
             "service": service,
             "configured": configured,
-            "valid": configured,
-            "message": f"API key for '{service}' is {'configured' if configured else 'not configured'}",
+            "valid": valid,
+            "message": message,
         }
     except HTTPException:
         raise

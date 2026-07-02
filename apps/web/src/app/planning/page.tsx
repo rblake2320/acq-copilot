@@ -65,8 +65,10 @@ export default function PlanningPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           description: description.trim(),
-          estimated_value: value ? parseInt(value.replace(/,/g, '')) : null,
-          naics_code: naics || null,
+          // Strip $, commas, spaces — parseInt("$250,000") is NaN, which
+          // serializes to null and silently reports "value $0"
+          estimated_value: value ? parseInt(value.replace(/[^0-9]/g, ''), 10) || null : null,
+          naics_code: naics.trim() || null,
           small_business_preference: sbPref,
           agency_type: agencyType,
         }),

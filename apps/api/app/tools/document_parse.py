@@ -31,12 +31,13 @@ class DocumentParseOutput(BaseModel):
 
 
 # FAR clause pattern: e.g. 52.212-4, 52.219-14, DFARS 252.204-7012
+# Suffixes are 1-2 digits for FAR/GSAM and 4 for DFARS, hence \d{1,4}.
 CLAUSE_PATTERN = re.compile(
-    r'\b((?:DFARS|FAR|GSAM)?\s*(?:252|52|552)\.\d{3}-\d{4}(?:\s+[A-Z][A-Za-z\s,()]+(?=\n|\.|\(|$))?)',
+    r'\b((?:DFARS|FAR|GSAM)?\s*(?:252|52|552)\.\d{3}-\d{1,4}(?:\s+[A-Z][A-Za-z\s,()]+(?=\n|\.|\(|$))?)',
     re.MULTILINE
 )
 
-CLAUSE_NUMBER_PATTERN = re.compile(r'\b((?:252|52|552)\.\d{3}-\d{4})\b')
+CLAUSE_NUMBER_PATTERN = re.compile(r'\b((?:252|52|552)\.\d{3}-\d{1,4})\b')
 
 # FAR section titles dictionary (most common solicitation clauses)
 FAR_CLAUSE_TITLES = {
